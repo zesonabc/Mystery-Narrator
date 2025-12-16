@@ -71,4 +71,62 @@ def generate_image_http(prompt, key):
             ],
             "parameters": {
                 "sampleCount": 1,
-                "aspectRatio": "16:9"
+                "aspectRatio": "16:9" 
+            }
+        }
+        
+        try:
+            # 发送网络请求
+            response = requests.post(url, headers=headers, json=data, timeout=30)
+            
+            if response.status_code != 200:
+                print(f"模型 {model_name} HTTP 报错: {response.text}")
+                continue # 试下一个模型
+                
+            # 解析返回结果
+            response_json = response.json()
+            
+            # Imagen 协议通常返回 base64 编码的图片
+            # 结构通常是 predictions[0].bytesBase64Encoded
+            if "predictions" in response_json:
+                b64_data = response_json["predictions"][0]["bytesBase64Encoded"]
+                image_data = base64.b64decode(b64_data)
+                return Image.open(io.BytesIO(image_data))
+            else:
+                return f"API 返回了无法识别的数据: {str(response_json)[:100]}"
+                
+        except Exception as e:
+            continue
+            
+    return "所有 HTTP 请求均失败，请检查 Key 权限。"
+
+# ================= 主界面 =================
+st.title("🍌 MysteryNarrator (HTTP版)")
+text_input = st.text_area("输入解说词", height=100)
+
+if st.button("🚀 暴力启动"):
+    if not api_key:
+        st.error("请填入 Key")
+    else:
+        with st.spinner("🤖 正在通过 HTTP 协议连接 Google..."):
+            scenes = analyze_script(text_input, api_key)
+            
+        if scenes:
+            st.success(f"分析完成！开始 HTTP 画图...")
+            result_container = st.container()
+            for i, scene in enumerate(scenes):
+                with result_container:
+                    c1, c2 = st.columns([1, 2])
+                    with c1:
+                        st.markdown(f"**#{i+1}**")
+                        st.write(scene['script'])
+                    with c2:
+                        # 使用 HTTP 函数
+                        img_res = generate_image_http(scene['prompt'], api_key)
+                        
+                        if isinstance(img_res, str):
+                            st.warning("⚠️ 画图失败")
+                            st.caption(img_res)
+                        else:
+                            st.image(img_res)
+                st.divider()
