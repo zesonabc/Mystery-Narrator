@@ -5,26 +5,26 @@ import json
 from PIL import Image
 
 # ================= 配置区 =================
-st.set_page_config(page_title="MysteryNarrator 2.5", layout="wide", page_icon="🍌")
+st.set_page_config(page_title="MysteryNarrator 2025", layout="wide", page_icon="🍌")
 
 st.markdown("""
 <style>
     .stApp { background-color: #050505; color: #e0e0e0; }
-    .stButton>button { background-color: #0080FF; color: white; border: none; font-weight: bold; }
+    .stButton>button { background-color: #00CC66; color: white; border: none; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
 with st.sidebar:
-    st.title("🍌 2.5 Flash Engine")
+    st.title("🍌 2025 Engine")
     api_key = st.text_input("Gemini API Key", type="password")
-    st.info("Target Models (Based on screenshot):\n- Text: gemini-2.5-flash\n- Image: gemini-2.5-flash-image")
+    st.success("Targeting Free Models:\n1. Nano Banana (2.5 Flash Image)\n2. Imagen 4 Fast")
 
 # ================= 核心逻辑 =================
 def analyze_script(script, key):
     genai.configure(api_key=key)
     
-    # 【文本模型】使用截图里的 "Gemini 2.5 Flash"
-    # 相比 3.0 Pro，这个应该是免费的
+    # 1. 文本模型：使用 Gemini 2.5 Flash
+    # (截图里显示的最新 Flash 模型，通常免费)
     target_model = 'gemini-2.5-flash'
     
     try:
@@ -48,38 +48,46 @@ def analyze_script(script, key):
 def generate_image(prompt, key):
     genai.configure(api_key=key)
     
-    # 【画图模型】使用截图里的 "Nano Banana" (非Pro版)
+    # === 关键修改：双保险画图 ===
+    
+    # 优先尝试：Nano Banana (你刚才说能生成的那个)
     # ID: gemini-2.5-flash-image
-    target_model = 'gemini-2.5-flash-image'
+    model_priority_1 = 'gemini-2.5-flash-image'
+    
+    # 备选尝试：Imagen 4 Fast (通常是免费版专用)
+    # ID: imagen-4.0-fast-generate-001
+    model_priority_2 = 'imagen-4.0-fast-generate-001'
     
     try:
-        model = genai.GenerativeModel(target_model)
-        
-        # 尝试调用 Nano Banana
-        result = model.generate_images(
-            prompt=prompt,
-            number_of_images=1,
-            aspect_ratio="16:9"
-        )
+        # 试第一种
+        model = genai.GenerativeModel(model_priority_1)
+        result = model.generate_images(prompt=prompt, number_of_images=1, aspect_ratio="16:9")
         return result.images[0]._pil_image
-    except Exception as e:
-        return f"Nano Banana 报错: {str(e)}"
+    except Exception as e1:
+        # 第一种失败了，静默尝试第二种
+        try:
+            print(f"Nano Banana 失败，尝试 Imagen 4 Fast... {e1}")
+            model = genai.GenerativeModel(model_priority_2)
+            result = model.generate_images(prompt=prompt, number_of_images=1, aspect_ratio="16:9")
+            return result.images[0]._pil_image
+        except Exception as e2:
+            return f"所有免费模型均失败。\nNano Banana: {e1}\nImagen 4 Fast: {e2}"
 
 # ================= 主界面 =================
-st.title("🍌 MysteryNarrator (Flash 2.5 Edition)")
-st.caption("Environment: Gemini 2.5 Flash + Nano Banana")
+st.title("🍌 MysteryNarrator (Final Free Edition)")
+st.caption("Auto-switching: Nano Banana -> Imagen 4 Fast")
 
 text_input = st.text_area("输入解说词", height=100)
 
-if st.button("🚀 生成分镜与画面"):
+if st.button("🚀 生成"):
     if not api_key:
         st.error("请填入 Key")
     else:
-        with st.spinner("🤖 2.5 Flash 正在分析..."):
+        with st.spinner("🤖 正在分析文案..."):
             scenes = analyze_script(text_input, api_key)
             
         if scenes:
-            st.success(f"分析完成！正在调用 Nano Banana 画图...")
+            st.success(f"分析完成！开始画图...")
             
             result_container = st.container()
             
@@ -93,8 +101,9 @@ if st.button("🚀 生成分镜与画面"):
                     with c2:
                         img_res = generate_image(scene['prompt'], api_key)
                         if isinstance(img_res, str):
-                            st.warning("⚠️ 画图未成功")
-                            st.caption(img_res) # 显示具体报错
+                            st.warning("⚠️ 画图失败")
+                            # 只显示最后 100 个字符的报错，防止刷屏
+                            st.caption(img_res[-200:])
                         else:
                             st.image(img_res)
                 st.divider()
