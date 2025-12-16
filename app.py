@@ -56,7 +56,7 @@ def analyze_script(script_text, host_desc, style_desc, api_key):
     try:
         genai.configure(api_key=api_key)
         # 使用 Flash 模型进行文本分析，速度快
-        model = genai.GenerativeModel('gemini-1.5-flash') 
+        model = genai.GenerativeModel('gemini-pro') 
 
         prompt = f"""
         任务：将悬疑解说文案拆分为分镜，并生成英文绘画提示词。
@@ -191,4 +191,5 @@ if st.session_state.shot_list_df is not None:
                 st.markdown("---")
                 progress_bar.progress((index + 1) / total)
             
+
             st.success("🎉 所有画面生成完毕！右键保存图片即可使用。")
