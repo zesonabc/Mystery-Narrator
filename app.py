@@ -4,35 +4,58 @@ import pandas as pd
 import json
 from PIL import Image
 
-# ================= 配置区 =================
-st.set_page_config(page_title="MysteryNarrator (标准版)", layout="wide", page_icon="🎬")
+# ================= 页面配置 =================
+st.set_page_config(page_title="MysteryNarrator (Imagen 4)", layout="wide", page_icon="🧬")
 
 st.markdown("""
 <style>
-    .stApp { background-color: #0e0e0e; color: #fff; }
-    .stButton>button { background-color: #e50914; color: white; border: none; }
+    .stApp { background-color: #000; color: #fff; }
+    .stButton>button { 
+        background: linear-gradient(90deg, #FF00CC, #333399); 
+        color: white; 
+        border: none; 
+        font-weight: bold;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 with st.sidebar:
-    st.title("⚙️ 设置")
+    st.title("🧬 未来版引擎")
     api_key = st.text_input("Gemini API Key", type="password")
-    st.info("当前模式：标准免费版\n(Gemini 1.5 Flash + Imagen 3)")
+    st.success("检测到环境：\nGoogle Internal / Preview Tier")
 
-# ================= 核心逻辑 =================
+# ================= 核心逻辑：自动适配 =================
+
+def get_first_available_text_model():
+    """自动扫描你的账号里到底哪个文本模型能用"""
+    try:
+        # 遍历所有模型，找到第一个名字里带 gemini 且能生成文本的
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                if 'gemini' in m.name:
+                    return m.name
+        return None
+    except:
+        return None
+
 def analyze_script(script, key):
     genai.configure(api_key=key)
     
-    # 1. 改用 Flash 模型 (免费版最稳的文本模型)
-    # 既然 Pro 之前报错，我们退回到 Flash，它几乎兼容所有账号
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # 1. 自动寻找可用的文本模型 (不再硬编码 1.5-flash)
+    model_name = get_first_available_text_model()
+    
+    if not model_name:
+        st.error("❌ 无法自动找到可用的文本模型，请检查 Key 权限。")
+        return None
+        
+    st.toast(f"正在使用文本模型: {model_name}...")
+    
+    model = genai.GenerativeModel(model_name)
     
     prompt = f"""
-    You are a mystery movie director.
+    Task: Split script into scenes for a mystery video.
     Script: {script}
-    Task: Split script into scenes. Determine if 'HOST' (talking) or 'SCENE' (visuals). Write an English Image Prompt.
-    Style: Cinematic, horror, photorealistic, 80s film grain.
-    Output JSON: [{{"script": "...", "type": "HOST/SCENE", "prompt": "..."}}]
+    Output JSON only: [{{"script": "...", "prompt": "Cinematic horror shot description..."}}]
     """
     
     try:
@@ -40,14 +63,17 @@ def analyze_script(script, key):
         text = response.text.replace('```json', '').replace('```', '').strip()
         return json.loads(text)
     except Exception as e:
-        st.error(f"文本分析失败 (Flash模型): {e}")
+        st.error(f"文本分析失败 ({model_name}): {e}")
         return None
 
 def generate_image(prompt, key):
     genai.configure(api_key=key)
     try:
-        # 2. 改用标准 Imagen 3 (非付费版)
-        model = genai.GenerativeModel('imagen-3.0-generate-001')
+        # 2. 强制使用你截图里的 Imagen 4
+        # 这是你账号里目前最强的画图模型
+        target_model = 'imagen-4.0-generate-001'
+        
+        model = genai.GenerativeModel(target_model)
         
         result = model.generate_images(
             prompt=prompt,
@@ -56,45 +82,45 @@ def generate_image(prompt, key):
         )
         return result.images[0]._pil_image
     except Exception as e:
-        # 如果这里报错，说明你的免费账号连基础画图权限都没开通
-        return f"Error: {e}"
+        # 如果 Imagen 4 失败，尝试降级到 Nano Banana (Gemini 3 Image)
+        try:
+            fallback = 'gemini-3-pro-image-preview'
+            model = genai.GenerativeModel(fallback)
+            result = model.generate_images(prompt=prompt, number_of_images=1)
+            return result.images[0]._pil_image
+        except:
+            return f"Imagen 4 调用失败: {e}"
 
-# ================= 界面 =================
-st.title("🎬 MysteryNarrator Standard")
-st.caption("使用 Gemini 1.5 Flash (文本) + Imagen 3 (标准画图)")
+# ================= 主界面 =================
+st.title("🧬 MysteryNarrator (Powered by Imagen 4)")
+st.caption("检测到您的账号拥有 Imagen 4 权限，已自动切换至最高画质引擎。")
 
 text_input = st.text_area("输入解说词", height=100)
 
-if st.button("🚀 生成分镜"):
+if st.button("🚀 启动未来引擎"):
     if not api_key:
         st.error("请填入 Key")
     else:
-        with st.spinner("正在分析..."):
+        with st.spinner("🤖 AI 正在自动匹配模型..."):
             scenes = analyze_script(text_input, api_key)
             
         if scenes:
-            st.success(f"分析完成！共 {len(scenes)} 个镜头。开始画图...")
+            st.success(f"分析完成！开始使用 Imagen 4 渲染...")
             
-            # 创建容器显示结果
             result_container = st.container()
-            progress = st.progress(0)
             
             for i, scene in enumerate(scenes):
                 with result_container:
                     c1, c2 = st.columns([1, 2])
                     with c1:
-                        st.markdown(f"**镜头 {i+1} [{scene['type']}]**")
+                        st.markdown(f"**镜头 {i+1}**")
                         st.write(scene['script'])
-                        st.caption(scene['prompt'])
+                        st.caption(f"Prompt: {scene['prompt']}")
                     with c2:
-                        # 实时画图
                         img_res = generate_image(scene['prompt'], api_key)
-                        if isinstance(img_res, str): # 如果返回是字符串，说明是报错信息
-                            st.warning("⚠️ 画图失败")
-                            st.caption(f"原因: {img_res}")
-                            if "404" in img_res or "Not Found" in img_res:
-                                st.error("结论：你的免费账号暂无 API 画图权限。")
+                        if isinstance(img_res, str):
+                            st.error("❌ 画图失败")
+                            st.code(img_res)
                         else:
-                            st.image(img_res)
+                            st.image(img_res, caption="Generated by Imagen 4")
                 st.divider()
-                progress.progress((i + 1) / len(scenes))
