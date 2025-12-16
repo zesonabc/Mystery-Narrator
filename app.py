@@ -7,11 +7,11 @@ from PIL import Image
 import io
 
 # ==========================================
-# 1. 页面配置 (保持不变)
+# 1. 页面配置
 # ==========================================
 st.set_page_config(
-    page_title="MysteryNarrator - Gemini 3 Edition",
-    page_icon="🍌",
+    page_title="MysteryNarrator - Debug Mode",
+    page_icon="🛠️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -33,8 +33,7 @@ st.markdown("""
 # 2. Sidebar: 设置区
 # ==========================================
 with st.sidebar:
-    st.markdown("## ⚙️ Core Engine (Gemini 3)")
-    
+    st.markdown("## ⚙️ Core Engine")
     api_key = st.text_input("Gemini API Key", type="password")
     
     st.markdown("---")
@@ -47,21 +46,16 @@ with st.sidebar:
     visual_style = st.text_area("整体风格", value=default_style, height=80)
 
 # ==========================================
-# 3. 核心功能：适配你的 Nano Banana Pro 模型
+# 3. 核心功能
 # ==========================================
 
 def analyze_script(script_text, host_desc, style_desc, api_key):
-    """ Step 1: 文本分析 (使用 Gemini 3 Pro Preview) """
+    """ Step 1: 文本分析 (使用 Gemini 1.5 Pro - 最稳) """
     if not api_key: return None
-
     try:
         genai.configure(api_key=api_key)
-        
-        # 1. 这里改成你上一个截图里的文本模型 ID
-        # 如果报错，说明你的账号只能用 image 模型，那就把这里改回 'gemini-1.5-pro'
-        model_id = 'gemini-3-pro-preview' 
-        
-        model = genai.GenerativeModel(model_id) 
+        # 文本模型改回最稳的 Pro，防止 Nano Banana 不支持文本指令
+        model = genai.GenerativeModel('gemini-1.5-pro') 
 
         prompt = f"""
         任务：将悬疑解说文案拆分为分镜，并生成英文绘画提示词。
@@ -81,29 +75,26 @@ def analyze_script(script_text, host_desc, style_desc, api_key):
         Example: [{{ "time": "3s", "script": "...", "type": "HOST", "final_prompt": "..." }}]
         """
 
-        with st.spinner(f"🧠 AI ({model_id}) 正在分析剧本..."):
+        with st.spinner("🧠 AI 正在分析剧本..."):
             response = model.generate_content(prompt)
             text = response.text.replace('```json', '').replace('```', '').strip()
             data = json.loads(text)
             return pd.DataFrame(data)
-            
     except Exception as e:
-        st.error(f"文本分析失败: {e}")
-        st.warning("提示：如果文本模型报错，请检查你的 API Key 是否支持 'gemini-3-pro-preview'，或者尝试换回 'gemini-1.5-pro'。")
+        st.error(f"文本分析出错: {e}")
         return None
 
 def generate_real_image(prompt, api_key):
-    """ Step 2: 画图 (使用 Gemini 3 Pro Image Preview / Nano Banana Pro) """
+    """ Step 2: 画图 (使用 Imagen 3 标准版) """
     try:
         genai.configure(api_key=api_key)
         
-        # === 关键修改：这里填你截图里那个“香蕉”模型的 ID ===
-        target_image_model = 'gemini-3-pro-image-preview'
+        # === 强制使用标准 Imagen 3 模型 ===
+        # 不要用 Nano Banana，那个不稳定
+        target_model = 'imagen-3.0-generate-001'
         
-        imagen_model = genai.GenerativeModel(target_image_model)
+        imagen_model = genai.GenerativeModel(target_model)
         
-        # 注意：Gemini 3 Image 模型的参数可能略有不同
-        # 这里使用通用的生成方法
         result = imagen_model.generate_images(
             prompt=prompt,
             number_of_images=1,
@@ -115,24 +106,25 @@ def generate_real_image(prompt, api_key):
             return result.images[0]._pil_image
         else:
             return None
+            
     except Exception as e:
-        print(f"画图详细报错: {e}")
-        return None
+        # === 这里的改动：不再隐藏错误，直接抛出异常内容 ===
+        return f"Error: {str(e)}"
 
 # ==========================================
 # 4. 主界面 UI
 # ==========================================
 
-st.title("🍌 MysteryNarrator (Banana Edition)")
-st.caption("Current Model: Gemini 3 Pro Preview")
+st.title("🔪 MysteryNarrator (Debug Mode)")
+st.caption("Testing Model: imagen-3.0-generate-001")
 
-# --- Step 1: 输入文案 ---
+# --- Step 1 ---
 script_input = st.text_area("📝 输入解说文案", height=100, placeholder="男人推开门，地上的血迹已经干了...")
 
 if 'shot_list_df' not in st.session_state:
     st.session_state.shot_list_df = None
 
-# --- Step 2: 生成分镜表 ---
+# --- Step 2 ---
 if st.button("🎬 1. 分析文案 & 生成 Prompt"):
     if api_key and script_input:
         df = analyze_script(script_input, host_persona, visual_style, api_key)
@@ -141,25 +133,23 @@ if st.button("🎬 1. 分析文案 & 生成 Prompt"):
     else:
         st.warning("请输入 API Key 和文案")
 
-# --- Step 3: 展示表格并允许微调 ---
+# --- Step 3 ---
 if st.session_state.shot_list_df is not None:
     st.markdown("### 📋 确认分镜表")
-    
     edited_df = st.data_editor(
         st.session_state.shot_list_df,
         column_config={
             "final_prompt": st.column_config.TextColumn("绘图指令", width="large"),
-            "type": st.column_config.SelectboxColumn("类型", options=["HOST", "SCENE"], width="small"),
+            "type": st.column_config.SelectboxColumn("类型", width="small"),
         },
         use_container_width=True,
         hide_index=True
     )
-    
     st.session_state.shot_list_df = edited_df
 
-    # --- Step 4: 真实生成图片 ---
+    # --- Step 4 ---
     st.markdown("---")
-    st.markdown(f"### 🎨 2. 生成图片 (Using: gemini-3-pro-image-preview)")
+    st.markdown(f"### 🎨 2. 生成图片")
     
     if st.button("🚀 开始生成所有图片"):
         if not api_key:
@@ -167,29 +157,29 @@ if st.session_state.shot_list_df is not None:
         else:
             result_container = st.container()
             total = len(edited_df)
-            progress_bar = st.progress(0)
             
             for index, row in edited_df.iterrows():
                 with result_container:
                     c1, c2 = st.columns([1, 2])
-                    
                     with c1:
                         st.markdown(f"**{index+1}/{total}** `[{row['type']}]`")
                         st.caption(f"Prompt: {row['final_prompt'][:40]}...")
-                        status_text = st.empty()
-                        status_text.text("⏳ 正在请求 Nano Banana...")
+                        status = st.empty()
+                        status.text("⏳ 请求中...")
                     
                     with c2:
-                        img = generate_real_image(row['final_prompt'], api_key)
-                        if img:
-                            st.image(img, use_container_width=True)
-                            status_text.success("✅ Success")
+                        # 调用画图
+                        result = generate_real_image(row['final_prompt'], api_key)
+                        
+                        # 判断返回的是图片还是错误文字
+                        if isinstance(result, str) and result.startswith("Error"):
+                            status.error("❌ 失败")
+                            # 把具体的错误原因打印出来！
+                            st.code(result, language="text")
+                        elif result:
+                            st.image(result, use_container_width=True)
+                            status.success("✅ 成功")
                         else:
-                            # 失败时显示更详细的提示
-                            status_text.error("❌ Failed")
-                            st.warning("生成失败。请检查：1.Prompt是否包含敏感词 2.API Key 权限")
+                            status.error("❌ 未知失败")
                 
                 st.markdown("---")
-                progress_bar.progress((index + 1) / total)
-            
-            st.success("🎉 流程结束")
