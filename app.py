@@ -1,134 +1,87 @@
 import streamlit as st
 import google.generativeai as genai
 import pandas as pd
-import json
-import time
-from PIL import Image
 
-# ================= 配置区 =================
-st.set_page_config(page_title="MysteryNarrator (Auto-Fix)", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="API 体检中心", layout="wide", page_icon="🏥")
 
-st.markdown("""
-<style>
-    .stApp { background-color: #050505; color: #e0e0e0; }
-    .stButton>button { background-color: #2E8B57; color: white; border: none; font-weight: bold; }
-    .status-box { padding: 10px; border-radius: 5px; margin-bottom: 10px; border: 1px solid #333; }
-</style>
-""", unsafe_allow_html=True)
+st.title("🏥 Gemini API 深度体检")
+st.markdown("不要慌，我们一个个测试，看看到底是哪个环节报错。")
 
-with st.sidebar:
-    st.title("🛡️ 自动修复引擎")
-    api_key = st.text_input("Gemini API Key", type="password")
-    st.info("原理：自动寻找你账号里【真正免费】的模型，跳过付费陷阱。")
+api_key = st.text_input("请输入刚才新建的 API Key", type="password")
 
-# ================= 核心逻辑：打不死的小强 =================
-
-def get_working_text_model(key):
-    """ 自动寻找可用的文本模型 """
-    genai.configure(api_key=key)
-    
-    # 优先级列表：先试 2.0 (新且免费)，再试 1.5 (稳)，最后试 Flash
-    # 绝对不试 gemini-3，因为那个要钱
-    candidates = [
-        "gemini-2.0-flash-exp", 
-        "gemini-1.5-pro", 
-        "gemini-1.5-flash",
-        "gemini-1.0-pro"
-    ]
-    
-    status_text = st.empty()
-    
-    for model_name in candidates:
-        try:
-            status_text.text(f"正在尝试连接: {model_name} ...")
-            model = genai.GenerativeModel(model_name)
-            # 发送一个极简的测试请求
-            response = model.generate_content("Hi", request_options={"timeout": 5})
-            status_text.empty()
-            return model_name # 成功！返回这个能用的名字
-        except Exception as e:
-            # 失败了？没关系，试下一个
-            print(f"{model_name} 不可用: {e}")
-            continue
-            
-    return None
-
-def analyze_script(script, key):
-    # 1. 先找个能用的模型
-    valid_model_name = get_working_text_model(key)
-    
-    if not valid_model_name:
-        st.error("❌ 你的 Key 似乎无法连接任何免费模型。请检查 Key 是否已被封禁。")
-        return None
-        
-    st.toast(f"已连接模型: {valid_model_name}")
-    
-    # 2. 开始干活
-    model = genai.GenerativeModel(valid_model_name)
-    prompt = f"""
-    You are a mystery video director.
-    Script: {script}
-    Task: Split script into scenes. Write an Image Prompt for Imagen 3.
-    Output JSON: [{{"script": "...", "prompt": "..."}}]
-    """
-    
-    try:
-        response = model.generate_content(prompt)
-        text = response.text.replace('```json', '').replace('```', '').strip()
-        return json.loads(text)
-    except Exception as e:
-        st.error(f"分析失败: {e}")
-        return None
-
-def generate_image(prompt, key):
-    genai.configure(api_key=key)
-    
-    # 只尝试标准 Imagen 3，这是目前唯一的免费画图通道
-    # 如果这个报错，说明账号真没画图权限
-    target_model = 'imagen-3.0-generate-001'
-    
-    try:
-        model = genai.GenerativeModel(target_model)
-        result = model.generate_images(
-            prompt=prompt,
-            number_of_images=1,
-            aspect_ratio="16:9"
-        )
-        return result.images[0]._pil_image
-    except Exception as e:
-        return f"画图失败 ({str(e)})"
-
-# ================= 主界面 =================
-st.title("🎬 MysteryNarrator (Auto-Fix)")
-st.caption("不再报错版：自动匹配可用模型")
-
-text_input = st.text_area("输入解说词", height=100)
-
-if st.button("🚀 启动"):
+if st.button("🚀 开始体检"):
     if not api_key:
         st.error("请填入 Key")
     else:
-        with st.spinner("🤖 正在为您寻找免费通道..."):
-            scenes = analyze_script(text_input, api_key)
+        genai.configure(api_key=api_key)
+        
+        # 我们测试这 4 个最常用的标准模型
+        # 这些是 Google 官方文档里最稳的，绝对不是 Nano Banana 那种实验品
+        test_models = [
+            "gemini-1.5-flash", 
+            "gemini-1.5-flash-8b",
+            "gemini-1.5-pro",
+            "gemini-1.0-pro"
+        ]
+        
+        results = []
+        
+        progress_bar = st.progress(0)
+        
+        for i, model_name in enumerate(test_models):
+            status = "未知"
+            detail = ""
             
-        if scenes:
-            st.success(f"分析成功！开始画图...")
+            try:
+                # 尝试连接
+                model = genai.GenerativeModel(model_name)
+                # 发送极简请求
+                response = model.generate_content("Test", request_options={"timeout": 10})
+                
+                # 如果能走到这一步，说明成功了！
+                status = "✅ 通畅"
+                detail = "连接成功，可以使用！"
+                
+            except Exception as e:
+                # 捕捉具体的报错信息
+                error_str = str(e)
+                status = "❌ 失败"
+                
+                if "404" in error_str:
+                    detail = "404 Not Found (模型不存在/不支持)"
+                elif "429" in error_str:
+                    detail = "429 Quota Exceeded (免费额度耗尽/需付费)"
+                elif "403" in error_str:
+                    detail = "403 Permission Denied (API Key 权限不足/地区限制)"
+                elif "API key not valid" in error_str:
+                    detail = "Key 无效 (复制错了吗？)"
+                else:
+                    # 打印原始错误的前100个字符
+                    detail = f"其他错误: {error_str[:150]}..."
             
-            result_container = st.container()
-            
-            for i, scene in enumerate(scenes):
-                with result_container:
-                    c1, c2 = st.columns([1, 2])
-                    with c1:
-                        st.markdown(f"**#{i+1}**")
-                        st.write(scene['script'])
-                        st.caption(scene['prompt'])
-                    with c2:
-                        img_res = generate_image(scene['prompt'], api_key)
-                        if isinstance(img_res, str):
-                            # 画图失败不报错红字，而是显示优雅的提示
-                            st.warning("⚠️ 暂无图像")
-                            st.caption(f"原因: {img_res[:100]}...") # 只显示前100字
-                        else:
-                            st.image(img_res)
-                st.divider()
+            results.append({
+                "模型名称": model_name,
+                "状态": status,
+                "详细诊断": detail
+            })
+            progress_bar.progress((i + 1) / len(test_models))
+
+        # 展示体检报告
+        st.markdown("### 📋 体检报告")
+        df = pd.DataFrame(results)
+        st.table(df)
+        
+        # 智能建议
+        st.markdown("### 💡 医生建议")
+        success_count = len([r for r in results if r['状态'] == "✅ 通畅"])
+        
+        if success_count > 0:
+            st.success(f"好消息！发现了 {success_count} 个可用的模型。")
+            working_model = [r['模型名称'] for r in results if r['状态'] == "✅ 通畅"][0]
+            st.write(f"👉 请把你之后代码里的模型名字改成： **`{working_model}`** 即可解决问题！")
+        else:
+            st.error("所有模型都无法连接。")
+            st.write("可能原因：")
+            st.write("1. 你的 Google Cloud Project 没有开启 Generative Language API。")
+            st.write("2. 这个 Key 是新建的，可能需要等 1-2 分钟生效。")
+            st.write("3. Streamlit 服务器的网络暂时连不上 Google。")
