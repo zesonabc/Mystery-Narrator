@@ -6,212 +6,314 @@ import re
 import time
 import zipfile
 import io
+import uuid
+import os
 
 # ==========================================
-# 1. 页面配置 (极简稳定)
+# 1. 页面配置
 # ==========================================
-st.set_page_config(page_title="MysteryNarrator V14 (投产版)", page_icon="🏭", layout="wide")
+st.set_page_config(page_title="MysteryNarrator V17 (完美草稿版)", page_icon="📦", layout="wide")
 st.markdown("""
 <style>
-    .stApp { background-color: #1e1e1e; color: #e0e0e0; }
-    .stButton > button { background-color: #0078d7; color: white; border: none; padding: 12px; font-weight: bold; border-radius: 8px; }
-    .stButton > button:hover { background-color: #0063b1; }
-    img { border: 2px solid #444; border-radius: 8px; margin-bottom: 8px; }
-    .stSuccess { background-color: #107c10 !important; color: white; }
+    .stApp { background-color: #121212; color: #e0e0e0; }
+    .stButton > button { background-color: #00C853; color: white; border: none; padding: 12px; font-weight: bold; border-radius: 6px; }
+    .stButton > button:hover { background-color: #009624; }
+    .stSuccess { background-color: #2e7d32; color: white; }
+    .stInfo { background-color: #0277bd; color: white; }
+    img { border-radius: 5px; border: 1px solid #333; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 核心功能函数
+# 2. 剪映草稿生成器 (JianyingPro Draft)
+# ==========================================
+class JianyingDraftGenerator:
+    def __init__(self):
+        self.materials = {"videos": [], "audios": [], "texts": [], "canvas_animations": []}
+        self.tracks = []
+        self.width = 1920
+        self.height = 1080
+        self.us_base = 1000000 
+
+    def _get_id(self): return str(uuid.uuid4()).upper()
+
+    def add_media_track(self, shot_df, audio_duration_us):
+        # --- 视频轨道 (图片) ---
+        video_segments = []
+        current_offset = 0
+        
+        for i, row in shot_df.iterrows():
+            material_id = self._get_id()
+            # 重新计算 duration (避免浮点误差)
+            duration_us = int(row['duration'] * self.us_base)
+            
+            self.materials["videos"].append({
+                "id": material_id,
+                "type": "photo",
+                "path": f"D:/Mystery_Project/media/{i+1:03d}.jpg", # 虚拟路径，导入时重连
+                "duration": 10800000000, 
+                "width": self.width,
+                "height": self.height,
+                "name": f"{i+1:03d}.jpg"
+            })
+            
+            video_segments.append({
+                "id": self._get_id(),
+                "material_id": material_id,
+                "target_timerange": {"duration": duration_us, "start": current_offset},
+                "source_timerange": {"duration": duration_us, "start": 0}
+            })
+            current_offset += duration_us
+            
+        self.tracks.append({"id": self._get_id(), "type": "video", "segments": video_segments})
+
+        # --- 字幕轨道 (Text) ---
+        text_segments = []
+        current_offset = 0
+        for i, row in shot_df.iterrows():
+            duration_us = int(row['duration'] * self.us_base)
+            text_id = self._get_id()
+            
+            # 字幕样式：白色字，黑色描边 (防背景干扰)
+            content_obj = {
+                "text": row['script'], 
+                "styles": [{"fill": {"color": [1.0, 1.0, 1.0]}}],
+                "strokes": [{"color": [0.0, 0.0, 0.0], "width": 0.05}] 
+            }
+            
+            self.materials["texts"].append({
+                "id": text_id,
+                "type": "text",
+                "content": json.dumps(content_obj),
+                "font_size": 12.0 # 字体大小
+            })
+            
+            text_segments.append({
+                "id": self._get_id(),
+                "material_id": text_id,
+                "target_timerange": {"duration": duration_us, "start": current_offset},
+                "source_timerange": {"duration": duration_us, "start": 0}
+            })
+            current_offset += duration_us
+
+        self.tracks.append({"id": self._get_id(), "type": "text", "segments": text_segments})
+
+    def add_audio_track(self, audio_filename, duration_us):
+        audio_id = self._get_id()
+        self.materials["audios"].append({
+            "id": audio_id,
+            "path": f"D:/Mystery_Project/media/{audio_filename}", # 虚拟路径
+            "duration": duration_us,
+            "type": "extract_music",
+            "name": audio_filename
+        })
+        
+        self.tracks.append({"id": self._get_id(), "type": "audio", "segments": [{
+            "id": self._get_id(),
+            "material_id": audio_id,
+            "target_timerange": {"duration": duration_us, "start": 0},
+            "source_timerange": {"duration": duration_us, "start": 0}
+        }]})
+
+    def generate_json(self):
+        return {
+            "id": self._get_id(),
+            "materials": self.materials,
+            "tracks": self.tracks,
+            "version": 3,
+            "config": {"width": self.width, "height": self.height}
+        }
+
+# ==========================================
+# 3. 核心 API 函数
 # ==========================================
 def get_headers(api_key): return {"Authorization": f"Bearer {api_key}"}
 def clean_json_text(text): return re.sub(r'<think>.*?</think>', '', re.sub(r'```json|```', '', text), flags=re.DOTALL).strip()
 
-# ASR 听写
+# 听写 (获取时间轴)
 def transcribe_audio(audio_file, api_key):
     url = "https://api.siliconflow.cn/v1/audio/transcriptions"
     files = {'file': (audio_file.name, audio_file.getvalue(), audio_file.type), 'model': (None, 'FunAudioLLM/SenseVoiceSmall'), 'response_format': (None, 'verbose_json')}
     try: return requests.post(url, headers=get_headers(api_key), files=files, timeout=60).json()
     except: return None
 
-# 【物理切刀】强制把长文案切碎 (解决字幕糊屏的核心)
-def split_long_text(text, max_len=15):
-    # 先按标点切
-    chunks = re.split(r'([。？！，；\n])', text)
-    result = []
-    current = ""
-    for chunk in chunks:
-        # 如果加上这块还没超长，就拼起来
-        if len(current) + len(chunk) < max_len and not re.match(r'[。？！\n]', chunk):
-            current += chunk
-        else:
-            # 否则切一刀
-            if current: result.append(current)
-            current = chunk
-    if current: result.append(current)
-    return result
-
-# 角色提取 (带强力清洗)
-def extract_characters_silicon(script_text, model, key):
+# 角色分析 (优先用文案分析，更准)
+def extract_characters_silicon(script, model, key):
     url = "https://api.siliconflow.cn/v1/chat/completions"
     sys_prompt = "提取文案中的【剧情角色】。输出JSON列表: [{'name':'xx','prompt':'...'}]"
     try:
-        res = requests.post(url, json={"model": model, "messages": [{"role":"system","content":sys_prompt}, {"role":"user","content":script_text}], "response_format": {"type": "json_object"}}, headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, timeout=30)
+        res = requests.post(url, json={"model": model, "messages": [{"role":"system","content":sys_prompt}, {"role":"user","content":script}], "response_format": {"type": "json_object"}}, headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, timeout=30)
         df = pd.DataFrame(json.loads(clean_json_text(res.json()['choices'][0]['message']['content'])))
-        # 清洗掉 AI 识别错误的博主
-        if not df.empty: df = df[~df['name'].str.contains('博主|我|Host|解说', case=False, na=False)]
+        if not df.empty: df = df[~df['name'].str.contains('博主|我|Host', case=False, na=False)]
         return df
     except: return None
 
-# 分镜分析
-def analyze_split_sentences(sentences, char_names, style, res_p, model, key):
-    # 构造输入
-    input_data = json.dumps([{"id": i, "text": s} for i, s in enumerate(sentences)], ensure_ascii=False)
-    char_list_str = ", ".join(char_names)
-    
+# 分镜设计 (使用音频的时间轴，文案的内容)
+def analyze_segments(segments, char_names, style, res_p, model, key):
+    input_data = json.dumps([{"id":i,"text":s['text']} for i,s in enumerate(segments)], ensure_ascii=False)
+    char_list = ", ".join(char_names)
     sys_prompt = f"""
-    你是悬疑片导演。根据【句子列表】设计画面。
-    可用角色: {char_list_str}
-    风格: {style}, 构图: {res_p}
-    任务:
-    1. 判断类型: "CHARACTER"(有人) 或 "SCENE"(空镜)。
-    2. Prompt: 遇到角色只写占位符 [Name]。
-    输出: JSON 列表 "index", "type", "final_prompt"。
+    悬疑导演。角色:{char_list}。风格:{style}。构图:{res_p}。
+    任务: 为每一句字幕设计画面。Prompt: 遇角色写占位符[Name]。
+    输出JSON列表 "index", "type", "final_prompt"
     """
     try:
-        res = requests.post("https://api.siliconflow.cn/v1/chat/completions", json={"model": model, "messages": [{"role":"system","content":sys_prompt}, {"role":"user","content":input_data}], "response_format": {"type": "json_object"}}, headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, timeout=60)
+        res = requests.post("https://api.siliconflow.cn/v1/chat/completions", json={"model":model,"messages":[{"role":"system","content":sys_prompt},{"role":"user","content":input_data}],"response_format":{"type":"json_object"}}, headers={"Authorization":f"Bearer {key}","Content-Type":"application/json"}, timeout=60)
         result_list = json.loads(clean_json_text(res.json()['choices'][0]['message']['content']))
         if isinstance(result_list, dict): result_list = result_list.get('segments', [])
         
         merged = []
-        for i, sent in enumerate(sentences):
-            visual = next((item for item in result_list if item.get('index') == i), None)
+        for i, seg in enumerate(segments):
+            vis = next((item for item in result_list if item.get('index') == i), None)
+            duration = seg['end'] - seg['start']
             merged.append({
-                # 估算时间：每10个字算2秒，最少2秒
-                "duration": max(2.0, len(sent) * 0.2), 
-                "script": sent, 
-                "type": visual['type'] if visual else "SCENE", 
-                "final_prompt": visual['final_prompt'] if visual else f"Suspense scene, {style}"
+                "duration": duration, 
+                "script": seg['text'], 
+                "type": vis['type'] if vis else "SCENE", 
+                "final_prompt": vis['final_prompt'] if vis else f"Suspense scene, {style}"
             })
         return pd.DataFrame(merged)
     except: return None
 
-# 角色注入
+# 角色注入 (锁脸)
 def inject_character_prompts(shot_df, char_df):
     if shot_df is None or char_df is None: return shot_df
     char_dict = {f"[{row['name']}]": row['prompt'] for _, row in char_df.iterrows()}
-    def replace_placeholder(prompt):
-        for ph in re.findall(r'\[.*?\]', prompt):
-            if ph in char_dict: prompt = prompt.replace(ph, f"({char_dict[ph]}:1.3)")
-        return prompt
-    shot_df['final_prompt'] = shot_df['final_prompt'].apply(replace_placeholder)
+    def replace(p):
+        for ph in re.findall(r'\[.*?\]', p):
+            if ph in char_dict: p = p.replace(ph, f"({char_dict[ph]}:1.4)")
+        return p
+    shot_df['final_prompt'] = shot_df['final_prompt'].apply(replace)
     return shot_df
 
 # 画图
 def generate_image(prompt, size, key):
     try:
-        res = requests.post("https://api.siliconflow.cn/v1/images/generations", json={"model": "Kwai-Kolors/Kolors", "prompt": prompt, "image_size": size, "batch_size": 1}, headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, timeout=30)
+        res = requests.post("https://api.siliconflow.cn/v1/images/generations", json={"model":"Kwai-Kolors/Kolors","prompt":prompt,"image_size":size,"batch_size":1}, headers={"Authorization":f"Bearer {key}","Content-Type":"application/json"}, timeout=30)
         return res.json()['data'][0]['url'] if res.status_code == 200 else "Error"
     except: return "Error"
 
-# ZIP打包
-def create_zip(shot_df, imgs):
+# 强制切分 (处理长难句)
+def split_long_segments(raw_segments, max_len=18):
+    new_segments = []
+    for seg in raw_segments:
+        text = seg['text']; start = seg['start']; end = seg['end']; duration = end - start
+        if len(text) > max_len:
+            parts = [text[i:i+max_len] for i in range(0, len(text), max_len)]
+            part_dur = duration / len(parts)
+            for i, part in enumerate(parts):
+                new_segments.append({"text": part, "start": start+(i*part_dur), "end": start+((i+1)*part_dur)})
+        else: new_segments.append(seg)
+    return new_segments
+
+# ==========================================
+# 4. 打包功能
+# ==========================================
+def create_draft_zip(shot_df, imgs, audio_bytes, audio_name):
     buf = io.BytesIO()
-    # 计算SRT时间轴
-    current_time = 0.0
-    def fmt(s): ms=int((s-int(s))*1000); m,s=divmod(int(s),60); h,m=divmod(m,60); return f"{h:02}:{m:02}:{s:02},{ms:03}"
+    generator = JianyingDraftGenerator()
+    total_duration_us = int(shot_df['duration'].sum() * 1000000)
     
+    # 构建草稿结构
+    generator.add_audio_track(audio_name, total_duration_us)
+    generator.add_media_track(shot_df, total_duration_us)
+    
+    draft_content = generator.generate_json()
+    draft_meta = {"id": draft_content["id"], "name": "Mystery_Project", "last_modified": int(time.time()*1000)}
+
     with zipfile.ZipFile(buf, "w") as zf:
-        srt_content = ""
-        for i, r in shot_df.iterrows():
-            start = current_time
-            end = current_time + r['duration']
-            srt_content += f"{i+1}\n{fmt(start)} --> {fmt(end)}\n{r['script']}\n\n"
-            current_time = end
-        
-        zf.writestr("subtitle.srt", srt_content)
-        for i,u in imgs.items():
-            # 【重要】重命名为 001_shot.jpg 保证排序
-            try: zf.writestr(f"{i+1:03d}_shot.jpg", requests.get(u).content)
+        zf.writestr("draft_content.json", json.dumps(draft_content, indent=4))
+        zf.writestr("draft_meta_info.json", json.dumps(draft_meta, indent=4))
+        zf.writestr(f"media/{audio_name}", audio_bytes)
+        for i, u in imgs.items():
+            try: zf.writestr(f"media/{i+1:03d}.jpg", requests.get(u).content)
             except: pass
     return buf
 
 # ==========================================
-# 3. 界面逻辑
+# 5. 界面 UI
 # ==========================================
 if 'char_df' not in st.session_state: st.session_state.char_df = None
 if 'shot_df' not in st.session_state: st.session_state.shot_df = None
 if 'gen_imgs' not in st.session_state: st.session_state.gen_imgs = {}
-if 'sentences' not in st.session_state: st.session_state.sentences = [] 
+if 'audio_data' not in st.session_state: st.session_state.audio_data = None
+if 'segments' not in st.session_state: st.session_state.segments = []
 
 with st.sidebar:
     st.markdown("### 🔑 API Key"); api_key = st.text_input("SiliconFlow Key", type="password")
-    st.markdown("### 🕵️ 博主形象 (绝对锁定)"); 
-    fixed_host = st.text_area("Prompt", "(A 30-year-old Asian man, green cap, leather jacket:1.4)", height=80)
+    st.markdown("### 🕵️ 博主形象"); fixed_host = st.text_area("Prompt", "(A 30-year-old Asian man, green cap, leather jacket:1.4)", height=80)
     st.markdown("### 🛠️ 设置"); model = st.selectbox("大脑", ["Qwen/Qwen2.5-72B-Instruct", "deepseek-ai/DeepSeek-V3"])
-    res_str, res_prompt = {"16:9":("1280x720","Cinematic 16:9, Wide shot"), "9:16":("720x1280","9:16 portrait")}[st.selectbox("画幅", ["16:9", "9:16"])]
-    style = st.text_area("风格", "Film noir, suspense thriller, low key lighting.", height=60)
+    res_str, res_prompt = {"16:9":("1280x720","Cinematic 16:9"), "9:16":("720x1280","9:16 portrait")}[st.selectbox("画幅", ["16:9", "9:16"])]
+    style = st.text_area("风格", "Film noir, suspense thriller.", height=60)
 
-st.title("🏭 MysteryNarrator V14 (稳定投产版)")
-st.caption("流程：听写 -> 强制切短句 -> 生成素材包 -> 剪映一键合成")
+st.title("📦 MysteryNarrator V17 (完美草稿版)")
+st.caption("逻辑修正：先文案分析角色 -> 后录音对齐时间 -> 导出剪映草稿")
 
-# 模式选择 (默认音频，因为你要做视频)
-audio = st.file_uploader("1. 上传录音 (MP3/WAV)", type=['mp3','wav','m4a'])
+# --- Step 1: 文案与录音 ---
+c1, c2 = st.columns(2)
+with c1:
+    script_input = st.text_area("1. 粘贴文案 (用于精准分析角色)", height=150)
+with c2:
+    audio = st.file_uploader("2. 上传录音 (用于对齐时间)", type=['mp3','wav','m4a'])
 
-if audio and st.button("👂 2. 听写 & 智能切片"):
-    if not api_key: st.error("请填Key")
+if st.button("🔍 3. 分析文案 & 听写对齐"):
+    if not api_key: st.error("请填 Key")
+    elif not script_input or not audio: st.warning("请同时提供文案和录音")
     else:
-        with st.spinner("正在听写并强制切分..."):
+        st.session_state.audio_data = {"name": audio.name, "bytes": audio.getvalue()}
+        
+        # 并行处理：文案分析角色 + 录音分析时间
+        with st.spinner("双线处理中：分析角色 + 语音对齐..."):
+            # 1. 听写 (获取时间轴)
             asr = transcribe_audio(audio, api_key)
             if asr:
-                # 1. 拿到全文
-                full_text = "".join([s['text'] for s in asr.get('segments', [])])
-                # 2. 【核心】强制切碎，每句不超过 15 字
-                st.session_state.sentences = split_long_text(full_text, max_len=15)
+                # 强制切分长句 (保证字幕短)
+                st.session_state.segments = split_long_segments(asr.get('segments', []), max_len=18)
                 
-                with st.spinner("分析角色..."):
-                    df = extract_characters_silicon(full_text, model, api_key)
-                    if df is not None:
-                        host = pd.DataFrame([{"name":"博主(我)", "prompt":fixed_host}])
-                        st.session_state.char_df = pd.concat([host, df], ignore_index=True)
-                        st.success(f"准备就绪！切分为 {len(st.session_state.sentences)} 个短句。")
+                # 2. 角色提取 (用左边的纯文案，更准)
+                df = extract_characters_silicon(script_input, model, api_key)
+                if df is not None:
+                    host = pd.DataFrame([{"name":"博主(我)", "prompt":fixed_host}])
+                    st.session_state.char_df = pd.concat([host, df], ignore_index=True)
+                    st.success(f"分析完成！共 {len(st.session_state.segments)} 个分镜。")
 
-# 确认角色
+# --- Step 2: 确认 ---
 if st.session_state.char_df is not None:
     st.markdown("---")
     st.session_state.char_df = st.data_editor(st.session_state.char_df, num_rows="dynamic", key="c_ed")
-
-    if st.button("🎬 3. 生成分镜表"):
+    
+    if st.button("🎬 4. 生成分镜表"):
         with st.spinner("导演设计中..."):
-            char_names = st.session_state.char_df['name'].tolist()
-            df = analyze_split_sentences(st.session_state.sentences, char_names, style, res_prompt, model, api_key)
+            c_list = st.session_state.char_df['name'].tolist()
+            # 用听写出来的 segments (带时间) + 角色表 + 风格
+            df = analyze_segments(st.session_state.segments, c_list, style, res_prompt, model, api_key)
             if df is not None:
-                df = inject_character_prompts(df, st.session_state.char_df)
-                st.session_state.shot_df = df
-                st.success("分镜完成")
+                st.session_state.shot_df = inject_character_prompts(df, st.session_state.char_df)
+                st.success("分镜已生成")
 
-# 画图 & 预览
+# --- Step 3: 绘图与导出 ---
 if st.session_state.shot_df is not None:
-    st.markdown("---")
-    st.info("👇 检查：'script' 列应该都是短句，如果不满意可以手动修改")
     st.session_state.shot_df = st.data_editor(st.session_state.shot_df, num_rows="dynamic", key="s_ed")
     
-    col1, col2 = st.columns(2)
-    if col1.button("🚀 4. 开始绘图"):
-        st.markdown("#### 🖼️ 实时预览")
-        preview = st.container(); cols = preview.columns(4)
-        bar = st.progress(0); tot = len(st.session_state.shot_df)
-        
+    col_a, col_b = st.columns(2)
+    if col_a.button("🚀 5. 开始绘图"):
+        bar = st.progress(0); tot = len(st.session_state.shot_df); prev = st.columns(4)
         for i, r in st.session_state.shot_df.iterrows():
             url = generate_image(r['final_prompt'], res_str, api_key)
             if "Error" not in url:
                 st.session_state.gen_imgs[i] = url
-                with cols[i%4]: st.image(url, caption=f"{i+1}. {r['script']}", use_column_width=True)
+                with prev[i%4]: st.image(url, caption=f"{i+1}", use_column_width=True)
             bar.progress((i+1)/tot)
-            if i < tot-1: time.sleep(32) # 必须冷却
-        st.success("✅ 全部生成完毕！")
-        
-    if col2.button("📦 5. 下载剪映包"):
+            if i < tot-1: time.sleep(32)
+        st.success("绘图完成!")
+
+    if col_b.button("📦 6. 下载草稿包 (JianyingDraft.zip)"):
         if st.session_state.gen_imgs:
-            st.download_button("⬇️ 下载 Project.zip", create_zip(st.session_state.shot_df, st.session_state.gen_imgs).getvalue(), "project.zip", "application/zip")
+            zip_buf = create_draft_zip(
+                st.session_state.shot_df, 
+                st.session_state.gen_imgs, 
+                st.session_state.audio_data["bytes"],
+                st.session_state.audio_data["name"]
+            )
+            st.download_button("⬇️ 下载工程包", zip_buf.getvalue(), "Jianying_Draft.zip", "application/zip")
         else: st.warning("请先绘图")
