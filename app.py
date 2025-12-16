@@ -1,87 +1,100 @@
 import streamlit as st
 import google.generativeai as genai
 import pandas as pd
+import json
+from PIL import Image
 
-st.set_page_config(page_title="API 体检中心", layout="wide", page_icon="🏥")
+# ================= 配置区 =================
+st.set_page_config(page_title="MysteryNarrator 2.5", layout="wide", page_icon="🍌")
 
-st.title("🏥 Gemini API 深度体检")
-st.markdown("不要慌，我们一个个测试，看看到底是哪个环节报错。")
+st.markdown("""
+<style>
+    .stApp { background-color: #050505; color: #e0e0e0; }
+    .stButton>button { background-color: #0080FF; color: white; border: none; font-weight: bold; }
+</style>
+""", unsafe_allow_html=True)
 
-api_key = st.text_input("请输入刚才新建的 API Key", type="password")
+with st.sidebar:
+    st.title("🍌 2.5 Flash Engine")
+    api_key = st.text_input("Gemini API Key", type="password")
+    st.info("Target Models (Based on screenshot):\n- Text: gemini-2.5-flash\n- Image: gemini-2.5-flash-image")
 
-if st.button("🚀 开始体检"):
+# ================= 核心逻辑 =================
+def analyze_script(script, key):
+    genai.configure(api_key=key)
+    
+    # 【文本模型】使用截图里的 "Gemini 2.5 Flash"
+    # 相比 3.0 Pro，这个应该是免费的
+    target_model = 'gemini-2.5-flash'
+    
+    try:
+        model = genai.GenerativeModel(target_model)
+        
+        prompt = f"""
+        You are a mystery video director.
+        Script: {script}
+        Task: Split script into scenes. Write an Image Prompt.
+        Output JSON: [{{"script": "...", "prompt": "..."}}]
+        """
+        
+        response = model.generate_content(prompt)
+        text = response.text.replace('```json', '').replace('```', '').strip()
+        return json.loads(text)
+        
+    except Exception as e:
+        st.error(f"文本分析失败 ({target_model}): {e}")
+        return None
+
+def generate_image(prompt, key):
+    genai.configure(api_key=key)
+    
+    # 【画图模型】使用截图里的 "Nano Banana" (非Pro版)
+    # ID: gemini-2.5-flash-image
+    target_model = 'gemini-2.5-flash-image'
+    
+    try:
+        model = genai.GenerativeModel(target_model)
+        
+        # 尝试调用 Nano Banana
+        result = model.generate_images(
+            prompt=prompt,
+            number_of_images=1,
+            aspect_ratio="16:9"
+        )
+        return result.images[0]._pil_image
+    except Exception as e:
+        return f"Nano Banana 报错: {str(e)}"
+
+# ================= 主界面 =================
+st.title("🍌 MysteryNarrator (Flash 2.5 Edition)")
+st.caption("Environment: Gemini 2.5 Flash + Nano Banana")
+
+text_input = st.text_area("输入解说词", height=100)
+
+if st.button("🚀 生成分镜与画面"):
     if not api_key:
         st.error("请填入 Key")
     else:
-        genai.configure(api_key=api_key)
-        
-        # 我们测试这 4 个最常用的标准模型
-        # 这些是 Google 官方文档里最稳的，绝对不是 Nano Banana 那种实验品
-        test_models = [
-            "gemini-1.5-flash", 
-            "gemini-1.5-flash-8b",
-            "gemini-1.5-pro",
-            "gemini-1.0-pro"
-        ]
-        
-        results = []
-        
-        progress_bar = st.progress(0)
-        
-        for i, model_name in enumerate(test_models):
-            status = "未知"
-            detail = ""
+        with st.spinner("🤖 2.5 Flash 正在分析..."):
+            scenes = analyze_script(text_input, api_key)
             
-            try:
-                # 尝试连接
-                model = genai.GenerativeModel(model_name)
-                # 发送极简请求
-                response = model.generate_content("Test", request_options={"timeout": 10})
-                
-                # 如果能走到这一步，说明成功了！
-                status = "✅ 通畅"
-                detail = "连接成功，可以使用！"
-                
-            except Exception as e:
-                # 捕捉具体的报错信息
-                error_str = str(e)
-                status = "❌ 失败"
-                
-                if "404" in error_str:
-                    detail = "404 Not Found (模型不存在/不支持)"
-                elif "429" in error_str:
-                    detail = "429 Quota Exceeded (免费额度耗尽/需付费)"
-                elif "403" in error_str:
-                    detail = "403 Permission Denied (API Key 权限不足/地区限制)"
-                elif "API key not valid" in error_str:
-                    detail = "Key 无效 (复制错了吗？)"
-                else:
-                    # 打印原始错误的前100个字符
-                    detail = f"其他错误: {error_str[:150]}..."
+        if scenes:
+            st.success(f"分析完成！正在调用 Nano Banana 画图...")
             
-            results.append({
-                "模型名称": model_name,
-                "状态": status,
-                "详细诊断": detail
-            })
-            progress_bar.progress((i + 1) / len(test_models))
-
-        # 展示体检报告
-        st.markdown("### 📋 体检报告")
-        df = pd.DataFrame(results)
-        st.table(df)
-        
-        # 智能建议
-        st.markdown("### 💡 医生建议")
-        success_count = len([r for r in results if r['状态'] == "✅ 通畅"])
-        
-        if success_count > 0:
-            st.success(f"好消息！发现了 {success_count} 个可用的模型。")
-            working_model = [r['模型名称'] for r in results if r['状态'] == "✅ 通畅"][0]
-            st.write(f"👉 请把你之后代码里的模型名字改成： **`{working_model}`** 即可解决问题！")
-        else:
-            st.error("所有模型都无法连接。")
-            st.write("可能原因：")
-            st.write("1. 你的 Google Cloud Project 没有开启 Generative Language API。")
-            st.write("2. 这个 Key 是新建的，可能需要等 1-2 分钟生效。")
-            st.write("3. Streamlit 服务器的网络暂时连不上 Google。")
+            result_container = st.container()
+            
+            for i, scene in enumerate(scenes):
+                with result_container:
+                    c1, c2 = st.columns([1, 2])
+                    with c1:
+                        st.markdown(f"**#{i+1}**")
+                        st.write(scene['script'])
+                        st.caption(scene['prompt'])
+                    with c2:
+                        img_res = generate_image(scene['prompt'], api_key)
+                        if isinstance(img_res, str):
+                            st.warning("⚠️ 画图未成功")
+                            st.caption(img_res) # 显示具体报错
+                        else:
+                            st.image(img_res)
+                st.divider()
