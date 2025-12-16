@@ -2,50 +2,72 @@ import streamlit as st
 import requests
 import json
 
-st.set_page_config(page_title="API 验尸官", layout="wide", page_icon="⚖️")
-st.markdown("""<style>.stApp { background-color: #000; color: #fff; }</style>""", unsafe_allow_html=True)
+st.set_page_config(page_title="硅基流动 API 测试台", layout="wide", page_icon="🚀")
 
-st.title("⚖️ API 请求死因分析")
-st.warning("我们将直接向 Google 发送 HTTP 请求，并展示服务器返回的原始拒绝理由。")
+st.title("🚀 硅基流动 (SiliconFlow) 连通性测试")
+st.markdown("这个工具用于测试你的 Key 能否成功调用免费的画图模型。")
 
-api_key = st.text_input("请输入 Gemini API Key", type="password")
+# 你的 Key (sk- 开头)
+api_key = st.text_input("请输入你的 SiliconFlow API Key (sk-...)", type="password")
 
-def test_model_http(model_id, key):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:predict?key={key}"
-    headers = {"Content-Type": "application/json"}
+def test_siliconflow(model_name, key):
+    # 硅基流动的标准画图接口地址
+    url = "https://api.siliconflow.cn/v1/images/generations"
+    
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {key}"  # 必须带上 Bearer
+    }
+    
+    # 硅基流动要求的标准发送格式
     data = {
-        "instances": [{"prompt": "A banana on a table"}],
-        "parameters": {"sampleCount": 1}
+        "model": model_name,
+        "prompt": "A cute cyberpunk cat, cinematic lighting, high quality", # 测试提示词
+        "image_size": "1024x1024",
+        "batch_size": 1
     }
     
     try:
-        response = requests.post(url, headers=headers, json=data, timeout=10)
-        return response.status_code, response.text
+        with st.spinner(f"正在呼叫 {model_name} ..."):
+            response = requests.post(url, headers=headers, json=data, timeout=30)
+            
+        if response.status_code == 200:
+            # 成功！解析返回的图片地址
+            res_json = response.json()
+            # 通常图片地址在 data[0].url 里
+            image_url = res_json.get('data', [{}])[0].get('url')
+            return True, image_url, response.text
+        else:
+            return False, None, response.text
+            
     except Exception as e:
-        return 0, str(e)
+        return False, None, str(e)
 
-if st.button("🚨 开始侦查"):
+if st.button("⚡ 开始测试"):
     if not api_key:
-        st.error("没填 Key")
+        st.error("请先填入 Key！")
     else:
-        # 我们测试三个最可能的嫌疑人
-        suspects = [
-            "imagen-3.0-generate-001",   # 标准版
-            "gemini-2.5-flash-image",    # Nano Banana
-            "imagen-4.0-generate-001"    # Imagen 4
+        # 我们测试两个最适合你的模型：免费的 Kolors 和 便宜快读的 Flux
+        targets = [
+            "Kwai-Kolors/Kolors",             # 【重点】快手可图（免费，懂中文）
+            "black-forest-labs/FLUX.1-schnell" # Flux 极速版（免费/极低成本）
         ]
         
-        for model in suspects:
-            st.markdown(f"### 🔫 测试目标: `{model}`")
-            code, text = test_model_http(model, api_key)
-            
-            if code == 200:
-                st.success(f"🎉 奇迹发生了！这个模型可以用！")
-                st.image("https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif", width=200)
-            else:
-                st.error(f"❌ 失败 (状态码: {code})")
-                st.markdown("**Google 官方拒绝理由:**")
-                # 这是一个黑色的代码框，里面的内容至关重要
-                st.code(text, language="json")
-            
-            st.divider()
+        cols = st.columns(len(targets))
+        
+        for i, model in enumerate(targets):
+            with cols[i]:
+                st.subheader(f"测试模型: {model}")
+                success, img_url, raw_log = test_siliconflow(model, api_key)
+                
+                if success:
+                    st.success("✅ 调用成功！")
+                    st.image(img_url, caption="刚刚生成的测试图", use_column_width=True)
+                    st.markdown(f"[点击查看原图]({img_url})")
+                else:
+                    st.error("❌ 调用失败")
+                    st.markdown("**错误日志:**")
+                    st.code(raw_log, language="json")
+
+st.divider()
+st.info("💡 提示：如果 Kolors 测试成功，你就可以放心地去写那个小说转视频的脚本了！")
