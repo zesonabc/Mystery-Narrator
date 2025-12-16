@@ -4,75 +4,56 @@ import pandas as pd
 import json
 from PIL import Image
 
-# ================= 页面配置 =================
-st.set_page_config(page_title="MysteryNarrator (Imagen 4)", layout="wide", page_icon="🧬")
+# ================= 配置区 =================
+st.set_page_config(page_title="MysteryNarrator 2025", layout="wide", page_icon="🍌")
 
 st.markdown("""
 <style>
-    .stApp { background-color: #000; color: #fff; }
-    .stButton>button { 
-        background: linear-gradient(90deg, #FF00CC, #333399); 
-        color: white; 
-        border: none; 
-        font-weight: bold;
-    }
+    .stApp { background-color: #050505; color: #e0e0e0; }
+    .stButton>button { background-color: #D4AF37; color: black; border: none; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
 with st.sidebar:
-    st.title("🧬 未来版引擎")
+    st.title("🍌 2025 Core Engine")
     api_key = st.text_input("Gemini API Key", type="password")
-    st.success("检测到环境：\nGoogle Internal / Preview Tier")
+    st.info("Target Models:\n- Text: Gemini 3 Pro (Nano Banana)\n- Image: Imagen 4.0")
 
-# ================= 核心逻辑：自动适配 =================
-
-def get_first_available_text_model():
-    """自动扫描你的账号里到底哪个文本模型能用"""
-    try:
-        # 遍历所有模型，找到第一个名字里带 gemini 且能生成文本的
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                if 'gemini' in m.name:
-                    return m.name
-        return None
-    except:
-        return None
-
+# ================= 核心逻辑 =================
 def analyze_script(script, key):
     genai.configure(api_key=key)
     
-    # 1. 自动寻找可用的文本模型 (不再硬编码 1.5-flash)
-    model_name = get_first_available_text_model()
-    
-    if not model_name:
-        st.error("❌ 无法自动找到可用的文本模型，请检查 Key 权限。")
-        return None
-        
-    st.toast(f"正在使用文本模型: {model_name}...")
-    
-    model = genai.GenerativeModel(model_name)
-    
-    prompt = f"""
-    Task: Split script into scenes for a mystery video.
-    Script: {script}
-    Output JSON only: [{{"script": "...", "prompt": "Cinematic horror shot description..."}}]
-    """
+    # 【修正】使用 2025 年的标准文本模型：Gemini 3 Pro (Nano Banana)
+    # 旧的 1.5-flash 已被淘汰，不要再用了
+    target_model = 'gemini-3-pro-preview'
     
     try:
+        model = genai.GenerativeModel(target_model)
+        
+        prompt = f"""
+        You are a mystery video director.
+        Script: {script}
+        Task: Split script into scenes. Write an Image Prompt for Imagen 4.
+        Output JSON: [{{"script": "...", "prompt": "..."}}]
+        """
+        
         response = model.generate_content(prompt)
         text = response.text.replace('```json', '').replace('```', '').strip()
         return json.loads(text)
+        
     except Exception as e:
-        st.error(f"文本分析失败 ({model_name}): {e}")
+        # 如果 Gemini 3 也报错，那就真的没有任何文本模型可用了
+        st.error(f"文本分析失败 ({target_model}): {e}")
         return None
 
 def generate_image(prompt, key):
     genai.configure(api_key=key)
+    
+    # 【修正】使用你截图里确认存在的 Imagen 4
+    # 旧的 imagen-3.0 已被淘汰
+    target_model = 'imagen-4.0-generate-001'
+    
     try:
-        # 2. 强制使用你截图里的 Imagen 4
-        # 这是你账号里目前最强的画图模型
-        target_model = 'imagen-4.0-generate-001'
-        
         model = genai.GenerativeModel(target_model)
         
         result = model.generate_images(
@@ -82,30 +63,24 @@ def generate_image(prompt, key):
         )
         return result.images[0]._pil_image
     except Exception as e:
-        # 如果 Imagen 4 失败，尝试降级到 Nano Banana (Gemini 3 Image)
-        try:
-            fallback = 'gemini-3-pro-image-preview'
-            model = genai.GenerativeModel(fallback)
-            result = model.generate_images(prompt=prompt, number_of_images=1)
-            return result.images[0]._pil_image
-        except:
-            return f"Imagen 4 调用失败: {e}"
+        # 捕捉具体错误
+        return f"Imagen 4 报错: {str(e)}"
 
 # ================= 主界面 =================
-st.title("🧬 MysteryNarrator (Powered by Imagen 4)")
-st.caption("检测到您的账号拥有 Imagen 4 权限，已自动切换至最高画质引擎。")
+st.title("🍌 MysteryNarrator (2025 Edition)")
+st.caption("Using Gemini 3 Pro + Imagen 4")
 
 text_input = st.text_area("输入解说词", height=100)
 
-if st.button("🚀 启动未来引擎"):
+if st.button("🚀 生成分镜与画面"):
     if not api_key:
         st.error("请填入 Key")
     else:
-        with st.spinner("🤖 AI 正在自动匹配模型..."):
+        with st.spinner("🤖 Nano Banana 正在思考..."):
             scenes = analyze_script(text_input, api_key)
             
         if scenes:
-            st.success(f"分析完成！开始使用 Imagen 4 渲染...")
+            st.success(f"分析完成！正在调用 Imagen 4...")
             
             result_container = st.container()
             
@@ -113,14 +88,14 @@ if st.button("🚀 启动未来引擎"):
                 with result_container:
                     c1, c2 = st.columns([1, 2])
                     with c1:
-                        st.markdown(f"**镜头 {i+1}**")
+                        st.markdown(f"**#{i+1}**")
                         st.write(scene['script'])
-                        st.caption(f"Prompt: {scene['prompt']}")
+                        st.caption(scene['prompt'])
                     with c2:
                         img_res = generate_image(scene['prompt'], api_key)
                         if isinstance(img_res, str):
-                            st.error("❌ 画图失败")
+                            st.error("❌ 失败")
                             st.code(img_res)
                         else:
-                            st.image(img_res, caption="Generated by Imagen 4")
+                            st.image(img_res)
                 st.divider()
