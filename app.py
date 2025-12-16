@@ -9,7 +9,7 @@ import time
 # 1. 页面配置
 # ==========================================
 st.set_page_config(
-    page_title="MysteryNarrator - 悬疑解说助手 (V5.0)",
+    page_title="MysteryNarrator - 悬疑解说助手 (锁脸版)",
     page_icon="🕵️‍♂️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -45,27 +45,27 @@ def get_headers(api_key):
     }
 
 def clean_json_text(text):
-    # 清理 markdown
     text = re.sub(r'```json', '', text)
     text = re.sub(r'```', '', text)
-    # 专门针对 DeepSeek R1 可能出现的 <think> 标签进行清理
     text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
     return text.strip()
 
-# --- 功能 A: 角色分析 ---
+# --- 功能 A: 角色分析 (只找剧情人物) ---
 def extract_characters_silicon(script_text, model_choice, api_key):
     url = "https://api.siliconflow.cn/v1/chat/completions"
     
+    # 【修改点】: 明确告诉 AI 不要找博主，只找剧情里的人
     system_prompt = """
-    你是一位悬疑片选角导演。请阅读文案，提取关键角色。
-    要求：
-    1. 必须包含 "博主" (Host)。
-    2. 为每个角色生成英文外貌 Prompt (30词以内)。
-    3. 输出纯 JSON 对象列表: [{"name": "博主", "prompt": "..."}, {"name": "受害者", "prompt": "..."}]
+    你是一位悬疑片选角导演。请阅读文案，提取文案中出现的【剧情角色】（如受害者、嫌疑人、目击者）。
+    
+    【重要规则】
+    1. **不要**提取 "博主"、"解说员" 或 "我"。
+    2. 为每个提取的角色生成英文外貌 Prompt (30词以内)。
+    3. 输出纯 JSON 对象列表: [{"name": "受害者李某", "prompt": "A young woman..."}, {"name": "嫌疑人张三", "prompt": "..."}]
     """
 
     payload = {
-        "model": model_choice, # 使用用户选择的模型
+        "model": model_choice,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": script_text}
@@ -90,6 +90,7 @@ def extract_characters_silicon(script_text, model_choice, api_key):
 def analyze_script_with_characters(script_text, character_data, style_desc, resolution_prompt, model_choice, api_key):
     url = "https://api.siliconflow.cn/v1/chat/completions"
     
+    # 将角色数据转化为字符串提示
     char_prompt_list = ""
     for _, row in character_data.iterrows():
         char_prompt_list += f"- [{row['name']}]: {row['prompt']}\n"
@@ -97,7 +98,7 @@ def analyze_script_with_characters(script_text, character_data, style_desc, reso
     system_prompt = f"""
     你是一位悬疑电影导演。根据文案和角色表设计分镜。
     
-    【角色表】
+    【角色表 (必须严格引用)】
     {char_prompt_list}
     
     【风格与构图】
@@ -109,14 +110,14 @@ def analyze_script_with_characters(script_text, character_data, style_desc, reso
     2. 类型(type): "CHARACTER"(有人) 或 "SCENE"(空镜)。
     3. 英文 Prompt (final_prompt): 
        - 必须包含构图词(Long shot等)。
-       - 如涉及角色，必须复制角色表中的英文描述。
+       - **关键**: 如果镜头涉及角色表中的人物，必须直接复制角色表中的英文描述。
        - SCENE 镜头严禁出现人。
 
     【输出】纯 JSON 对象列表: "time", "script", "type", "visual_desc", "final_prompt"。
     """
 
     payload = {
-        "model": model_choice, # 使用用户选择的模型
+        "model": model_choice,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": script_text}
@@ -167,38 +168,31 @@ if 'shot_list_df' not in st.session_state: st.session_state.shot_list_df = None
 
 with st.sidebar:
     st.markdown("### 🔑 API 设置")
-    api_key = st.text_input("SiliconFlow Key", type="password", help="sk-...")
+    api_key = st.text_input("SiliconFlow Key", type="password")
     
     st.markdown("---")
-    st.markdown("### 🧠 导演大脑 (模型选择)")
-    # 这里是核心更新：让用户选模型
+    st.markdown("### 🕵️ 固定博主形象")
+    # 这里是你锁定的形象，不会变
+    fixed_host_prompt = st.text_area("博主 Prompt", value="A 30-year-old Asian man, wearing a green cap and brown leather jacket, stubble beard, looking at the viewer, dramatic lighting.", height=100)
+    
+    st.markdown("---")
+    st.markdown("### 🧠 模型选择")
     model_choice = st.selectbox(
-        "选择分析模型",
-        (
-            "Qwen/Qwen2.5-72B-Instruct", 
-            "deepseek-ai/DeepSeek-V3",
-            "deepseek-ai/DeepSeek-R1-Distill-Llama-70B" 
-        ),
-        index=0,
-        help="推荐 Qwen 72B (稳) 或 DeepSeek V3 (强)"
+        "选择大脑",
+        ("Qwen/Qwen2.5-72B-Instruct", "deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-R1-Distill-Llama-70B"),
+        index=0
     )
     
     st.markdown("---")
-    st.markdown("### 📐 画面与风格")
-    resolution_option = st.selectbox("画幅比例", ("电影宽屏 (16:9)", "标准横屏 (4:3)", "竖屏 (9:16)"), index=0)
-    
-    res_map = {
-        "电影宽屏 (16:9)": ("1280x720", "Cinematic 16:9, wide screen"),
-        "标准横屏 (4:3)": ("1024x768", "4:3 aspect ratio"),
-        "竖屏 (9:16)": ("720x1280", "9:16 portrait")
-    }
+    st.markdown("### 📐 画面设置")
+    resolution_option = st.selectbox("画幅", ("电影宽屏 (16:9)", "竖屏 (9:16)"), index=0)
+    res_map = {"电影宽屏 (16:9)": ("1280x720", "Cinematic 16:9"), "竖屏 (9:16)": ("720x1280", "9:16 portrait")}
     resolution_str, resolution_prompt = res_map[resolution_option]
 
-    default_style = """Film noir, suspense thriller, low key lighting, high contrast, gritty film grain, masterpiece."""
-    visual_style = st.text_area("影调风格", value=default_style, height=100)
+    default_style = "Film noir, suspense thriller, low key lighting, high contrast, gritty film grain."
+    visual_style = st.text_area("影调风格", value=default_style, height=80)
 
-st.title("🕵️‍♂️ MysteryNarrator V5")
-st.caption(f"当前大脑: {model_choice} | 当前画师: Kwai-Kolors")
+st.title("🕵️‍♂️ MysteryNarrator V5.1 (锁脸修正版)")
 
 # Step 1
 st.markdown("### 📝 1. 输入文案")
@@ -207,15 +201,23 @@ script_input = st.text_area("解说词...", height=150)
 # Step 2
 st.markdown("---")
 st.markdown("### 👥 2. 角色定妆")
-if st.button("🔍 提取角色"):
+if st.button("🔍 提取角色 (自动注入博主)"):
     if not api_key: st.warning("请填 Key")
     elif not script_input: st.warning("请填文案")
     else:
-        with st.spinner("正在分析角色..."):
-            char_df = extract_characters_silicon(script_input, model_choice, api_key)
-            if char_df is not None:
-                st.session_state.character_df = char_df
-                st.success("角色提取成功！")
+        with st.spinner("正在提取剧情人物，并注入博主形象..."):
+            # 1. AI 找剧情人物 (Liam, Sylvia 等)
+            story_chars_df = extract_characters_silicon(script_input, model_choice, api_key)
+            
+            if story_chars_df is not None:
+                # 2. 【核心修改】强制创建一个博主行
+                host_row = pd.DataFrame([{"name": "博主 (我)", "prompt": fixed_host_prompt}])
+                
+                # 3. 把博主拼到第一行
+                final_df = pd.concat([host_row, story_chars_df], ignore_index=True)
+                
+                st.session_state.character_df = final_df
+                st.success("✅ 角色提取成功！博主已锁定为侧边栏设定。")
 
 if st.session_state.character_df is not None:
     edited_char_df = st.data_editor(st.session_state.character_df, num_rows="dynamic", key="char_edit")
