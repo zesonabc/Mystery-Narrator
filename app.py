@@ -12,7 +12,7 @@ import os
 # ==========================================
 # 1. 页面配置
 # ==========================================
-st.set_page_config(page_title="MysteryNarrator V36 (听写加固版)", page_icon="🕵️", layout="wide")
+st.set_page_config(page_title="MysteryNarrator V37 (绘图修复版)", page_icon="🎨", layout="wide")
 st.markdown("""
 <style>
     .stApp { background-color: #121212; color: #e0e0e0; }
@@ -105,23 +105,20 @@ class JianyingDraftGenerator:
         return {"draft_materials": self.meta_materials, "tm_draft_create_time": self._now(), "tm_draft_modify_time": self._now(), "draft_root": "", "draft_cover": "draft_cover.jpg", "draft_name": "Mystery_Project", "draft_id": self.project_id, "tm_duration": self.total_duration}
 
 # ==========================================
-# 3. 核心 API (听写功能加固)
+# 3. 核心 API
 # ==========================================
 def get_headers(api_key): return {"Authorization": f"Bearer {api_key.strip()}", "Content-Type": "application/json"}
 def clean_json_text(text): return re.sub(r'<think>.*?</think>', '', re.sub(r'```json|```', '', text), flags=re.DOTALL).strip()
 
 def transcribe_audio(audio_file, api_key):
     url = "https://api.siliconflow.cn/v1/audio/transcriptions"
-    # 【修复1】强制重置指针
     audio_file.seek(0)
-    # 【修复2】指定文件名，防止特殊字符报错
     files = {
         'file': ("audio.mp3", audio_file.getvalue(), audio_file.type), 
         'model': (None, 'FunAudioLLM/SenseVoiceSmall'), 
         'response_format': (None, 'verbose_json')
     }
     try: 
-        # 【修复3】超时时间延长到 120s
         res = requests.post(url, headers={"Authorization": f"Bearer {api_key.strip()}"}, files=files, timeout=120)
         if res.status_code == 200:
             return res.json(), None
@@ -191,12 +188,43 @@ def inject_character_prompts(shot_df, char_df):
     shot_df['final_prompt'] = shot_df['final_prompt'].apply(replace)
     return shot_df
 
+# 【修复】加强版绘图函数：显示错误，增加超时
 def generate_image(prompt, size, key):
-    try:
-        width, height = 1280, 720 if "16:9" in size else 720, 1280
-        res = requests.post("https://api.siliconflow.cn/v1/images/generations", json={"model":"black-forest-labs/FLUX.1-schnell","prompt":prompt,"image_size":f"{width}x{height}","batch_size":1,"num_inference_steps":4,"guidance_scale":3.5}, headers=get_headers(key), timeout=50)
-        return res.json()['images'][0]['url'] if res.status_code == 200 else "Error"
-    except: return "Error"
+    # 尺寸映射: FLUX Schnell 推荐尺寸
+    width, height = "1024", "1024" 
+    if "16:9" in size: width, height = "1024", "576" 
+    if "9:16" in size: width, height = "576", "1024"
+    
+    payload = {
+        "model": "black-forest-labs/FLUX.1-schnell",
+        "prompt": prompt,
+        "image_size": f"{width}x{height}", 
+        "batch_size": 1,
+        "num_inference_steps": 4,
+        "guidance_scale": 1
+    }
+    
+    # 尝试重试
+    for attempt in range(2):
+        try:
+            res = requests.post(
+                "https://api.siliconflow.cn/v1/images/generations", 
+                json=payload, 
+                headers=get_headers(key), 
+                timeout=120 # 120s 超时
+            )
+            if res.status_code == 200:
+                return res.json()['images'][0]['url']
+            else:
+                # 记录错误但不立即返回，除非是最后一次尝试
+                error_msg = f"API Error {res.status_code}: {res.text}"
+                if attempt == 1: return error_msg
+                time.sleep(1)
+        except Exception as e:
+            if attempt == 1: return f"Network Error: {str(e)}"
+            time.sleep(1)
+            
+    return "Unknown Error"
 
 def create_draft_zip(shot_df, imgs, audio_bytes, audio_name):
     buf = io.BytesIO()
@@ -244,8 +272,8 @@ with st.sidebar:
     style = st.text_area("风格", "Film noir, suspense thriller, Chinese background.", height=60)
     st.info("🎨 绘图: FLUX.1-schnell")
 
-st.title("🛡️ MysteryNarrator V36 (听写加固版)")
-st.caption("修复'听写失败'误报 | 增强错误显示 | 超时保护")
+st.title("🛡️ MysteryNarrator V37 (绘图修复版)")
+st.caption("超时延长至120s | 错误显形 | 自动重试")
 
 c1, c2 = st.columns(2)
 with c1: script_input = st.text_area("1. 粘贴文案", height=150)
@@ -258,7 +286,6 @@ if st.button("🔍 3. 智能分析"):
         if audio:
             st.session_state.audio_data = {"name": audio.name, "bytes": audio.getvalue()}
             with st.spinner("听写中..."):
-                # 获取返回值和错误信息
                 asr, error_msg = transcribe_audio(audio, api_key)
                 
                 if asr and 'segments' in asr:
@@ -266,9 +293,8 @@ if st.button("🔍 3. 智能分析"):
                     st.success("✅ 录音对齐成功")
                 else:
                     st.session_state.segments = []
-                    # 显示具体错误原因
-                    if error_msg: st.error(f"❌ 听写服务报错: {error_msg}")
-                    st.warning("⚠️ 转为【文案估算模式】继续运行...")
+                    if error_msg: st.error(f"❌ 听写报错: {error_msg}")
+                    st.warning("⚠️ 听写失败，使用文案估算")
         else:
             st.session_state.audio_data = {"name": "silent.mp3", "bytes": b""}
             st.session_state.segments = []
@@ -293,17 +319,24 @@ if st.session_state.char_df is not None:
 
 if st.session_state.shot_df is not None and not st.session_state.shot_df.empty:
     st.session_state.shot_df = st.data_editor(st.session_state.shot_df, num_rows="dynamic", key="s_ed", use_container_width=True)
-    c1, c2 = st.columns(2)
-    if c1.button("🎨 5. FLUX 绘图"):
+    
+    col1, col2 = st.columns(2)
+    if col1.button("🎨 5. FLUX 绘图"):
         bar = st.progress(0); tot = len(st.session_state.shot_df); prev = st.columns(4)
         for i, r in st.session_state.shot_df.iterrows():
             url = generate_image(r['final_prompt'], aspect, api_key)
+            # 【修复】如果 URL 包含 Error，则打印错误
             if "Error" not in url:
                 st.session_state.gen_imgs[i] = url
                 with prev[i%4]: st.image(url, caption=f"#{i+1}", use_column_width=True)
-            bar.progress((i+1)/tot); time.sleep(1) 
+            else:
+                st.error(f"第 {i+1} 张失败: {url}")
+            
+            bar.progress((i+1)/tot)
+            # 不再 sleep，全速运行
         st.success("完成!")
-    if c2.button("📦 6. 下载工程包"):
+
+    if col2.button("📦 6. 下载草稿包"):
         if st.session_state.gen_imgs:
             zip_buf = create_draft_zip(st.session_state.shot_df, st.session_state.gen_imgs, st.session_state.audio_data["bytes"], st.session_state.audio_data["name"])
             st.download_button("⬇️ 下载草稿包", zip_buf.getvalue(), "Jianying_Mystery_Draft.zip", "application/zip", type="primary")
