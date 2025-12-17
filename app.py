@@ -12,41 +12,40 @@ import os
 # ==========================================
 # 1. 页面配置
 # ==========================================
-st.set_page_config(page_title="MysteryNarrator V27 (完美复刻版)", page_icon="🧬", layout="wide")
+st.set_page_config(page_title="MysteryNarrator V28 (最终修正版)", page_icon="🧬", layout="wide")
 st.markdown("""
 <style>
     .stApp { background-color: #121212; color: #e0e0e0; }
     .stButton > button { background-color: #00E676; color: black; border: none; padding: 12px; font-weight: bold; border-radius: 6px; }
     .stSuccess { background-color: #1b5e20; color: white; }
-    .stWarning { background-color: #e65100; color: white; }
     img:hover { transform: scale(1.02); transition: 0.3s; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 剪映草稿生成器 (核心重构)
+# 2. 剪映草稿生成器 (ID 同步修复)
 # ==========================================
 class JianyingDraftGenerator:
     def __init__(self):
-        # draft_content.json 的数据结构
+        # 【核心修复】初始化时生成唯一的 Project ID，并在 Content 和 Meta 中共用！
+        self.project_id = str(uuid.uuid4()).upper()
+        
         self.content_materials = {
             "videos": [], "audios": [], "texts": [], "canvas_animations": [], 
             "speeds": [], "sound_channel_mappings": []
         }
         self.tracks = []
-        
-        # draft_meta_info.json 的数据结构 (关键！之前缺这个)
         self.meta_materials = [] 
         
         self.width = 1920
         self.height = 1080
-        self.us_base = 1000000 # 1秒 = 1000000微秒
+        self.us_base = 1000000 
 
     def _get_id(self): return str(uuid.uuid4()).upper()
     def _now(self): return int(time.time() * 1000000)
 
     def add_media_track(self, shot_df):
-        # --- 视频轨道 (Images) ---
+        # 视频轨道
         video_segments = []
         current_offset = 0
         
@@ -54,20 +53,21 @@ class JianyingDraftGenerator:
             material_id = self._get_id()
             duration_us = int(round(row['duration'] * self.us_base))
             file_name = f"{i+1:03d}.jpg"
-            file_path = f"D:/Mystery_Project/media/{file_name}" # 虚拟绝对路径
+            # 使用相对简单的虚拟路径，防止特殊字符报错
+            file_path = f"D:/Mystery_Project/media/{file_name}" 
             
-            # 1. 写入 content.json (时间轴用)
+            # Content
             self.content_materials["videos"].append({
                 "id": material_id,
                 "type": "photo",
                 "path": file_path,
-                "duration": 10800000000, # 图片素材本身长度给足
+                "duration": 10800000000, 
                 "width": self.width,
                 "height": self.height,
                 "name": file_name
             })
             
-            # 2. 【关键】写入 meta_info.json (素材库用)
+            # Meta
             self.meta_materials.append({
                 "create_time": self._now(),
                 "duration": 10800000000,
@@ -79,14 +79,14 @@ class JianyingDraftGenerator:
                 "import_time_ms": int(time.time()*1000),
                 "item_source": 1,
                 "md5": "",
-                "metetype": "photo", # 注意这里是 metetype
+                "metetype": "photo",
                 "roughcut_time_range": {"duration": -1, "start": -1},
                 "sub_time_range": {"duration": -1, "start": -1},
-                "type": 0, # 0代表视频/图片
+                "type": 0, 
                 "width": self.width
             })
             
-            # 3. 构建轨道片段
+            # Track
             video_segments.append({
                 "id": self._get_id(),
                 "material_id": material_id,
@@ -97,7 +97,7 @@ class JianyingDraftGenerator:
             
         self.tracks.append({"id": self._get_id(), "type": "video", "segments": video_segments})
 
-        # --- 字幕轨道 ---
+        # 字幕轨道
         text_segments = []
         current_offset = 0
         for i, row in shot_df.iterrows():
@@ -128,7 +128,6 @@ class JianyingDraftGenerator:
         audio_id = self._get_id()
         file_path = f"D:/Mystery_Project/media/{audio_filename}"
         
-        # 1. Content
         self.content_materials["audios"].append({
             "id": audio_id,
             "path": file_path,
@@ -137,7 +136,6 @@ class JianyingDraftGenerator:
             "name": audio_filename
         })
         
-        # 2. Meta (音频也必须注册)
         self.meta_materials.append({
             "create_time": self._now(),
             "duration": duration_us,
@@ -151,10 +149,9 @@ class JianyingDraftGenerator:
             "metetype": "music",
             "roughcut_time_range": {"duration": -1, "start": -1},
             "sub_time_range": {"duration": -1, "start": -1},
-            "type": 1 # 1代表音频
+            "type": 1 
         })
         
-        # 3. Track
         self.tracks.append({"id": self._get_id(), "type": "audio", "segments": [{
             "id": self._get_id(),
             "material_id": audio_id,
@@ -164,28 +161,28 @@ class JianyingDraftGenerator:
 
     def get_content_json(self):
         return {
-            "id": self._get_id(),
+            "id": self.project_id, # 【修复】使用统一 ID
             "materials": self.content_materials,
             "tracks": self.tracks,
-            "version": 2, # 稳定版本
+            "version": 2, 
             "config": {"width": self.width, "height": self.height},
             "platform": {"os": "windows"}
         }
 
-    def get_meta_json(self, cover_path):
+    def get_meta_json(self):
         return {
-            "draft_materials": self.meta_materials, # 核心修复：这里不再是空的了！
+            "draft_materials": self.meta_materials,
             "tm_draft_create_time": self._now(),
             "tm_draft_modify_time": self._now(),
-            "draft_root": "D:/Mystery_Project", # 虚拟根目录
-            "draft_cover": cover_path, # 封面
+            "draft_root": "D:/Mystery_Project", 
+            "draft_cover": "", # 【修复】留空，防止因找不到封面路径而卡死
             "draft_name": "Mystery_Project",
-            "draft_id": self._get_id(),
-            "tm_duration": 0 # 自动计算
+            "draft_id": self.project_id, # 【修复】使用统一 ID
+            "tm_duration": 0
         }
 
 # ==========================================
-# 3. 核心 API (保持 V25 的修复)
+# 3. 核心 API (保持不变)
 # ==========================================
 def get_headers(api_key): return {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 def clean_json_text(text): return re.sub(r'<think>.*?</think>', '', re.sub(r'```json|```', '', text), flags=re.DOTALL).strip()
@@ -271,45 +268,28 @@ def generate_image(prompt, size, key):
         return res.json()['images'][0]['url'] if res.status_code == 200 else "Error"
     except: return "Error"
 
-# 【重点升级】ZIP 打包逻辑：生成完整工程结构
 def create_draft_zip(shot_df, imgs, audio_bytes, audio_name):
     buf = io.BytesIO()
     gen = JianyingDraftGenerator()
     total_duration_us = int(shot_df['duration'].sum() * 1000000)
-    
-    # 添加轨道数据
     gen.add_audio_track(audio_name, total_duration_us)
-    gen.add_media_track(shot_df) # 这里会自动同时写入 meta 和 content
+    gen.add_media_track(shot_df)
     
-    # 封面使用第一张图
-    cover_name = "draft_cover.jpg"
+    # 简单的占位文件
+    virtual_store = {"virtual_objects": []}
     
-    # 根文件夹名
+    # 【关键】保持和 MetaInfo 里的 draft_root 路径一致的文件夹结构
+    # 虽然这里是 ZIP，但解压后要让剪映认出
     root = "Mystery_Project_Draft"
 
     with zipfile.ZipFile(buf, "w") as zf:
-        # 1. 写入 draft_content.json
         zf.writestr(f"{root}/draft_content.json", json.dumps(gen.get_content_json(), indent=4))
-        
-        # 2. 写入 draft_meta_info.json (这是修复“转圈”的关键！)
-        zf.writestr(f"{root}/draft_meta_info.json", json.dumps(gen.get_meta_json(cover_name), indent=4))
-        
-        # 3. 写入音频
+        zf.writestr(f"{root}/draft_meta_info.json", json.dumps(gen.get_meta_json(), indent=4))
+        zf.writestr(f"{root}/draft_virtual_store.json", json.dumps(virtual_store, indent=4))
         zf.writestr(f"{root}/media/{audio_name}", audio_bytes)
-        
-        # 4. 写入图片
-        first_img_bytes = None
         for i, u in imgs.items():
-            try: 
-                img_data = requests.get(u).content
-                if i == 0: first_img_bytes = img_data
-                zf.writestr(f"{root}/media/{i+1:03d}.jpg", img_data)
+            try: zf.writestr(f"{root}/media/{i+1:03d}.jpg", requests.get(u).content)
             except: pass
-            
-        # 5. 写入封面 (防止列表里显示黑屏)
-        if first_img_bytes:
-            zf.writestr(f"{root}/{cover_name}", first_img_bytes)
-            
     return buf
 
 # ==========================================
@@ -323,17 +303,17 @@ if 'segments' not in st.session_state: st.session_state.segments = []
 
 with st.sidebar:
     st.markdown("### 🔑 Key"); api_key = st.text_input("SiliconFlow Key", type="password")
-    st.markdown("### 🕵️ 博主"); fixed_host = st.text_area("Prompt", "(A 30-year-old Chinese man, Asian face, black hair, green cap, leather jacket:1.4)", height=80)
+    st.markdown("### 🕵️ 博主"); fixed_host = st.text_area("Prompt", "(A 30-year-old Chinese man, Asian face, black hair, green cap, leather jacket:1.4), looking at camera", height=80)
     st.markdown("### 🧠 设置"); model = st.selectbox("大脑", ["deepseek-ai/DeepSeek-V3", "Qwen/Qwen2.5-72B-Instruct"])
     aspect = st.selectbox("画幅", ["16:9 (横屏)", "9:16 (竖屏)"])
     style = st.text_area("风格", "Film noir, suspense thriller, Chinese background.", height=60)
     st.info("🎨 绘图: FLUX.1-schnell")
 
-st.title("🧬 MysteryNarrator V27 (完美复刻版)")
-st.caption("完整元数据 | 修复转圈卡死 | 国风 | FLUX")
+st.title("🧬 MysteryNarrator V28 (最终修正版)")
+st.caption("ID同步 | 完美草稿结构 | 秒开")
 
 c1, c2 = st.columns(2)
-with c1: script_input = st.text_area("1. 粘贴文案 (保底用)", height=150)
+with c1: script_input = st.text_area("1. 粘贴文案", height=150)
 with c2: audio = st.file_uploader("2. 上传录音", type=['mp3','wav','m4a'])
 
 if st.button("🔍 3. 智能分析"):
