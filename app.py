@@ -12,19 +12,19 @@ import os
 # ==========================================
 # 1. 页面配置
 # ==========================================
-st.set_page_config(page_title="MysteryNarrator V32 (故障显影版)", page_icon="🚑", layout="wide")
+st.set_page_config(page_title="MysteryNarrator V34 (极速同步版)", page_icon="⚡", layout="wide")
 st.markdown("""
 <style>
     .stApp { background-color: #121212; color: #e0e0e0; }
-    .stButton > button { background-color: #6200EA; color: white; border: none; padding: 12px; font-weight: bold; border-radius: 6px; }
-    .stSuccess { background-color: #00C853; color: white; }
+    .stButton > button { background-color: #FFD600; color: black; border: none; padding: 12px; font-weight: bold; border-radius: 6px; }
+    .stSuccess { background-color: #2e7d32; color: white; }
     .stError { background-color: #D32F2F; color: white; padding: 10px; border-radius: 5px; }
     img { border-radius: 5px; border: 1px solid #333; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 剪映草稿生成器 (保持V30完美结构)
+# 2. 剪映草稿生成器
 # ==========================================
 class JianyingDraftGenerator:
     def __init__(self):
@@ -78,7 +78,9 @@ class JianyingDraftGenerator:
             text_id = self._get_id()
             content = {"text": str(row['script']), "styles": [{"fill": {"color": [1.0, 1.0, 1.0]}}], "strokes": [{"color": [0.0, 0.0, 0.0], "width": 0.05}]}
             self.content_materials["texts"].append({"id": text_id, "type": "text", "content": json.dumps(content), "font_size": 12.0})
-            text_segments.append({"id": self._get_id(), "material_id": text_id, "target_timerange": {"duration": duration_us, "start": current_offset}, "source_timerange": {"duration": duration_us, "start": 0}})
+            text_segments.append({
+                "id": self._get_id(), "material_id": text_id,
+                "target_timerange": {"duration": duration_us, "start": current_offset}, "source_timerange": {"duration": duration_us, "start": 0}})
             current_offset += duration_us
         self.tracks.append({"id": self._get_id(), "type": "text", "segments": text_segments})
 
@@ -159,39 +161,48 @@ def inject_character_prompts(shot_df, char_df):
     shot_df['final_prompt'] = shot_df['final_prompt'].apply(replace)
     return shot_df
 
-# 【重点修改】绘图函数带详细报错
+# 【重点修改】绘图函数：移除 time.sleep，保留超时重试
 def generate_image_debug(prompt, size, key):
-    try:
-        # SiliconFlow 建议格式: 1024x1024, 720x1280 (必须是字符串)
-        # 修正: FLUX Schnell 支持的尺寸是固定的几种，1280x720 可能不被支持
-        # 我们改成最稳的 1024x1024 然后裁剪，或者尝试标准比例
-        width, height = "1024", "1024" 
-        if "16:9" in size: width, height = "1024", "576" # 16:9 接近比例
-        if "9:16" in size: width, height = "576", "1024" # 9:16 接近比例
-        
-        payload = {
-            "model": "black-forest-labs/FLUX.1-schnell",
-            "prompt": prompt,
-            "image_size": f"{width}x{height}", 
-            "batch_size": 1,
-            "num_inference_steps": 4,
-            "guidance_scale": 1 # Schnell 建议设为 1 或 3.5
-        }
-        
-        res = requests.post(
-            "https://api.siliconflow.cn/v1/images/generations", 
-            json=payload, 
-            headers=get_headers(key), 
-            timeout=50
-        )
-        
-        if res.status_code == 200:
-            return True, res.json()['images'][0]['url']
-        else:
-            return False, f"API Error {res.status_code}: {res.text}"
+    max_retries = 2
+    width, height = "1024", "1024" 
+    if "16:9" in size: width, height = "1024", "576" 
+    if "9:16" in size: width, height = "576", "1024"
+    
+    payload = {
+        "model": "black-forest-labs/FLUX.1-schnell",
+        "prompt": prompt,
+        "image_size": f"{width}x{height}", 
+        "batch_size": 1,
+        "num_inference_steps": 4,
+        "guidance_scale": 1
+    }
+
+    for attempt in range(max_retries):
+        try:
+            # 增加 timeout 到 120s
+            res = requests.post(
+                "https://api.siliconflow.cn/v1/images/generations", 
+                json=payload, 
+                headers=get_headers(key), 
+                timeout=120 
+            )
             
-    except Exception as e:
-        return False, f"Code Error: {str(e)}"
+            if res.status_code == 200:
+                return True, res.json()['images'][0]['url']
+            else:
+                error_msg = f"API Error {res.status_code}: {res.text}"
+                # 如果失败，稍等再试
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                    continue
+                return False, error_msg
+                
+        except Exception as e:
+            error_msg = f"Network Error: {str(e)}"
+            if attempt < max_retries - 1:
+                time.sleep(1)
+                continue
+            return False, error_msg
 
 def create_draft_zip(shot_df, imgs, audio_bytes, audio_name):
     buf = io.BytesIO()
@@ -201,7 +212,6 @@ def create_draft_zip(shot_df, imgs, audio_bytes, audio_name):
     gen.add_media_track(shot_df)
     
     root = "Mystery_Project_Draft"
-    # 补全所有配置文件
     files = {
         "draft_content.json": json.dumps(gen.get_content_json(), indent=4),
         "draft_meta_info.json": json.dumps(gen.get_meta_json(), indent=4),
@@ -237,13 +247,13 @@ if 'segments' not in st.session_state: st.session_state.segments = []
 
 with st.sidebar:
     st.markdown("### 🔑 Key"); api_key = st.text_input("SiliconFlow Key", type="password")
-    st.markdown("### 🕵️ 博主"); fixed_host = st.text_area("Prompt", "(A 30-year-old Chinese man, Asian face, green cap, leather jacket:1.4)", height=80)
+    st.markdown("### 🕵️ 博主"); fixed_host = st.text_area("Prompt", "(A 30-year-old Chinese man, Asian face, black hair, green cap, leather jacket:1.4), looking at camera", height=80)
     st.markdown("### 🧠 设置"); model = st.selectbox("大脑", ["deepseek-ai/DeepSeek-V3", "Qwen/Qwen2.5-72B-Instruct"])
     aspect = st.selectbox("画幅", ["16:9 (横屏)", "9:16 (竖屏)"])
     style = st.text_area("风格", "Film noir, suspense thriller, Chinese background.", height=60)
-    st.info("🎨 绘图: FLUX.1-schnell")
+    st.info("🎨 绘图: FLUX.1-schnell (极速版)")
 
-st.title("🚑 MysteryNarrator V32 (故障显影版)")
+st.title("⚡ MysteryNarrator V34 (极速同步版)")
 
 c1, c2 = st.columns(2)
 with c1: script_input = st.text_area("1. 粘贴文案", height=150)
@@ -285,40 +295,32 @@ if st.session_state.char_df is not None:
             if st.session_state.shot_df.empty: st.error("❌ 分镜为空")
             else: st.success("OK")
 
-# 只有在分镜不为空时才渲染绘图区域
 if st.session_state.shot_df is not None and not st.session_state.shot_df.empty:
     st.markdown("### 5. 绘图预览")
     st.session_state.shot_df = st.data_editor(st.session_state.shot_df, num_rows="dynamic", key="s_ed", use_container_width=True)
     
-    # 画廊区域：无论是否正在生成，只要有图就显示
     gallery_container = st.container()
     cols = gallery_container.columns(4)
-    # 如果已有图片，先显示出来
+    # 显示已生成的图
     if st.session_state.gen_imgs:
         for i, url in st.session_state.gen_imgs.items():
-            if i < len(st.session_state.shot_df): # 防止索引越界
-                with cols[i % 4]:
-                    st.image(url, caption=f"#{i+1}", use_column_width=True)
+            if i < len(st.session_state.shot_df):
+                with cols[i % 4]: st.image(url, caption=f"#{i+1}", use_column_width=True)
 
     c1, c2 = st.columns(2)
-    if c1.button("🎨 5. FLUX 绘图 (点击开始)"):
+    if c1.button("🎨 5. FLUX 绘图 (极速模式)"):
         bar = st.progress(0)
         tot = len(st.session_state.shot_df)
         
         for i, r in st.session_state.shot_df.iterrows():
-            # 调用带 debug 的绘图函数
             success, result = generate_image_debug(r['final_prompt'], aspect, api_key)
-            
             if success:
                 st.session_state.gen_imgs[i] = result
-                # 实时刷新当前这张图
-                with cols[i % 4]:
-                    st.image(result, caption=f"#{i+1}", use_column_width=True)
+                with cols[i % 4]: st.image(result, caption=f"#{i+1}", use_column_width=True)
             else:
-                st.error(f"第 {i+1} 张失败: {result}") # 把错误打印出来！
-            
+                st.error(f"第 {i+1} 张失败: {result}")
             bar.progress((i+1)/tot)
-            time.sleep(1) # 稍微快一点
+            # 【优化】删除了 loop 里的 sleep，全速运行
         st.success("✅ 全部尝试完成")
 
     if c2.button("📦 6. 下载工程包"):
