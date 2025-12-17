@@ -12,14 +12,13 @@ import os
 # ==========================================
 # 1. 页面配置
 # ==========================================
-st.set_page_config(page_title="MysteryNarrator V21 (强制保底版)", page_icon="🛡️", layout="wide")
+st.set_page_config(page_title="MysteryNarrator V22 (手动对齐版)", page_icon="✂️", layout="wide")
 st.markdown("""
 <style>
     .stApp { background-color: #121212; color: #e0e0e0; }
     .stButton > button { background-color: #00C853; color: white; border: none; padding: 12px; font-weight: bold; border-radius: 6px; }
-    .stButton > button:hover { background-color: #009624; }
     .stSuccess { background-color: #2e7d32; color: white; }
-    .stWarning { background-color: #f57f17; color: white; }
+    .stWarning { background-color: #ff6f00; color: white; }
     img { border-radius: 5px; border: 1px solid #333; }
 </style>
 """, unsafe_allow_html=True)
@@ -62,7 +61,6 @@ class JianyingDraftGenerator:
         for i, row in shot_df.iterrows():
             duration_us = int(row['duration'] * self.us_base)
             text_id = self._get_id()
-            # 字幕内容
             content = {"text": str(row['script']), "styles": [{"fill": {"color": [1.0, 1.0, 1.0]}}], "strokes": [{"color": [0.0, 0.0, 0.0], "width": 0.05}]}
             self.materials["texts"].append({
                 "id": text_id, "type": "text", "content": json.dumps(content), "font_size": 12.0
@@ -97,13 +95,11 @@ def get_headers(api_key): return {"Authorization": f"Bearer {api_key}"}
 def clean_json_text(text): return re.sub(r'<think>.*?</think>', '', re.sub(r'```json|```', '', text), flags=re.DOTALL).strip()
 
 def transcribe_audio(audio_file, api_key):
+    # 尝试多种读取方式，增加成功率
     url = "https://api.siliconflow.cn/v1/audio/transcriptions"
-    # 【修复】重置文件指针，防止传空文件
     audio_file.seek(0)
     files = {'file': (audio_file.name, audio_file.getvalue(), audio_file.type), 'model': (None, 'FunAudioLLM/SenseVoiceSmall'), 'response_format': (None, 'verbose_json')}
-    try: 
-        res = requests.post(url, headers=get_headers(api_key), files=files, timeout=60)
-        return res.json()
+    try: return requests.post(url, headers=get_headers(api_key), files=files, timeout=60).json()
     except: return None
 
 def extract_characters_silicon(script, model, key):
@@ -116,42 +112,23 @@ def extract_characters_silicon(script, model, key):
     except: return pd.DataFrame(columns=['name', 'prompt'])
 
 def analyze_segments_robust(segments, script_text, char_names, style, res_p, model, key):
-    """
-    最强保底逻辑：
-    1. 优先用 Audio Segments (时间准)。
-    2. 如果 Audio 为空，强制切分 Script Text，并按字数估算时间。
-    3. 如果 AI 分析失败，强制使用规则生成分镜。
-    """
-    
-    # --- 阶段一：数据源准备 ---
-    use_fallback_source = False
-    
-    # 检查 Audio 数据是否有效
-    if not segments or len(segments) == 0:
-        use_fallback_source = True
-    
+    # 如果Segments为空，直接切分文本
     final_segments = []
-    
-    if not use_fallback_source:
+    if segments:
         final_segments = segments
     else:
-        # B计划：按标点切分文本，估算时间
-        st.warning("⚠️ 检测到听写数据为空，已启动【B计划】：根据文案文本强制生成分镜！")
+        # B计划：按标点切分
         chunks = re.split(r'([。？！；\n])', script_text)
         current = ""
         for chunk in chunks:
             if len(current) + len(chunk) < 18 and not re.match(r'[。？！\n]', chunk): current += chunk
             else: 
                 if current: 
-                    # 估算时长：每个字0.25秒，最少2秒
-                    duration = max(2.0, len(current) * 0.25)
-                    final_segments.append({"text": current, "duration": duration})
+                    # 【关键】保底模式下，默认每张图 5 秒，方便你在剪映里剪
+                    final_segments.append({"text": current, "duration": 5.0})
                 current = chunk
-        if current: 
-            duration = max(2.0, len(current) * 0.25)
-            final_segments.append({"text": current, "duration": duration})
+        if current: final_segments.append({"text": current, "duration": 5.0})
 
-    # --- 阶段二：AI 分析 ---
     try:
         input_data = json.dumps([{"id":i,"text":s.get('text', '')} for i,s in enumerate(final_segments)], ensure_ascii=False)
         char_list = ", ".join(char_names)
@@ -160,45 +137,33 @@ def analyze_segments_robust(segments, script_text, char_names, style, res_p, mod
         任务: 为每一句字幕设计画面。Prompt: 遇角色写占位符[Name]。
         输出JSON列表 "index", "type", "final_prompt"
         """
-        
         res = requests.post("https://api.siliconflow.cn/v1/chat/completions", json={"model":model,"messages":[{"role":"system","content":sys_prompt},{"role":"user","content":input_data}],"response_format":{"type":"json_object"}}, headers={"Authorization":f"Bearer {key}","Content-Type":"application/json"}, timeout=60)
         
-        content = clean_json_text(res.json()['choices'][0]['message']['content'])
-        result_list = json.loads(content)
+        result_list = json.loads(clean_json_text(res.json()['choices'][0]['message']['content']))
         if isinstance(result_list, dict): result_list = result_list.get('segments', [])
         
         merged = []
         for i, seg in enumerate(final_segments):
             vis = next((item for item in result_list if item.get('index') == i), None)
-            
-            # 兼容两种数据源的 duration 获取方式
             dur = seg.get('duration')
-            if dur is None: # 如果是 Audio 源，需要计算
-                dur = seg['end'] - seg['start']
-
+            if dur is None: dur = seg['end'] - seg['start'] # Audio源
+            
             merged.append({
                 "duration": dur,
                 "script": seg.get('text'),
                 "type": vis['type'] if vis else "SCENE",
                 "final_prompt": vis['final_prompt'] if vis else f"Suspense scene, {style}"
             })
-        
         return pd.DataFrame(merged)
 
-    except Exception as e:
-        # --- 阶段三：最后的防线 (AI崩了，纯规则生成) ---
-        st.error(f"AI 分析超时，已切换至【纯规则模式】: {e}")
-        fallback_data = []
+    except:
+        # 最后的防线
+        fallback = []
         for seg in final_segments:
             dur = seg.get('duration')
-            if dur is None: dur = seg['end'] - seg['start']
-            fallback_data.append({
-                "duration": dur,
-                "script": seg.get('text'),
-                "type": "SCENE",
-                "final_prompt": f"Cinematic suspense shot, {style}, {res_p}"
-            })
-        return pd.DataFrame(fallback_data)
+            if dur is None: dur = 5.0
+            fallback.append({"duration": dur, "script": seg.get('text'), "type": "SCENE", "final_prompt": f"Suspense shot, {style}, {res_p}"})
+        return pd.DataFrame(fallback)
 
 def inject_character_prompts(shot_df, char_df):
     if shot_df is None or shot_df.empty or 'final_prompt' not in shot_df.columns: return shot_df
@@ -216,24 +181,10 @@ def generate_image(prompt, size, key):
         return res.json()['data'][0]['url'] if res.status_code == 200 else "Error"
     except: return "Error"
 
-def split_long_segments(raw_segments, max_len=18):
-    if not raw_segments: return []
-    new_segments = []
-    for seg in raw_segments:
-        text = seg['text']; start = seg['start']; end = seg['end']; duration = end - start
-        if len(text) > max_len:
-            parts = [text[i:i+max_len] for i in range(0, len(text), max_len)]
-            part_dur = duration / len(parts)
-            for i, part in enumerate(parts):
-                new_segments.append({"text": part, "start": start+(i*part_dur), "end": start+((i+1)*part_dur)})
-        else: new_segments.append(seg)
-    return new_segments
-
 def create_draft_zip(shot_df, imgs, audio_bytes, audio_name):
     buf = io.BytesIO()
     generator = JianyingDraftGenerator()
     total_duration_us = int(shot_df['duration'].sum() * 1000000)
-    
     generator.add_audio_track(audio_name, total_duration_us)
     generator.add_media_track(shot_df, total_duration_us)
     
@@ -265,31 +216,28 @@ with st.sidebar:
     res_str, res_prompt = {"16:9":("1280x720","Cinematic 16:9"), "9:16":("720x1280","9:16 portrait")}[st.selectbox("画幅", ["16:9", "9:16"])]
     style = st.text_area("风格", "Film noir, suspense thriller.", height=60)
 
-st.title("🛡️ MysteryNarrator V21 (强制保底版)")
+st.title("✂️ MysteryNarrator V22 (手动对齐版)")
 
 c1, c2 = st.columns(2)
-with c1: script_input = st.text_area("1. 粘贴文案 (用于角色分析 & 保底)", height=150)
-with c2: audio = st.file_uploader("2. 上传录音 (用于对齐)", type=['mp3','wav','m4a'])
+with c1: script_input = st.text_area("1. 粘贴文案", height=150)
+with c2: audio = st.file_uploader("2. 上传录音", type=['mp3','wav','m4a'])
 
 if st.button("🔍 3. 分析"):
-    if not api_key: st.error("请填 Key")
-    elif not script_input: st.error("⚠️ 必须填写文案！如果录音失败，我们需要文案来保底。")
-    elif not audio: st.error("请上传录音")
+    if not api_key: st.error("Key?")
+    elif not script_input or not audio: st.error("文案和录音都得有")
     else:
         st.session_state.audio_data = {"name": audio.name, "bytes": audio.getvalue()}
-        
         with st.spinner("处理中..."):
-            # 1. 尝试听写
             asr = transcribe_audio(audio, api_key)
             if asr and 'segments' in asr and len(asr['segments']) > 0:
-                st.session_state.segments = split_long_segments(asr['segments'], max_len=18)
-                st.success(f"✅ 听写成功！使用录音时间轴 ({len(st.session_state.segments)}句)")
+                # 听到了
+                st.session_state.segments = asr['segments'] # 使用原版详细切分
+                st.success(f"✅ 听到了！将使用精准自动对齐。")
             else:
-                # 听写失败，清空 segments，触发后续的 B计划
+                # 没听到，触发保底
                 st.session_state.segments = []
-                st.warning("⚠️ 听写未返回内容，稍后将使用【纯文案模式】强制生成。")
-            
-            # 2. 提取角色
+                st.warning("⚠️ 没听到声音（但录音已保存）。将生成固定时长图片，请在剪映里手动拖动对齐。")
+
             df = extract_characters_silicon(script_input, model, api_key)
             if df is None: df = pd.DataFrame(columns=['name', 'prompt'])
             host = pd.DataFrame([{"name":"博主(我)", "prompt":fixed_host}])
@@ -297,10 +245,9 @@ if st.button("🔍 3. 分析"):
 
 if st.session_state.char_df is not None:
     st.session_state.char_df = st.data_editor(st.session_state.char_df, num_rows="dynamic", key="c_ed")
-    if st.button("🎬 4. 生成分镜表"):
+    if st.button("🎬 4. 生成分镜"):
         with st.spinner("导演设计中..."):
             c_list = st.session_state.char_df['name'].tolist()
-            # 传入文案 script_input 作为保底数据
             df = analyze_segments_robust(st.session_state.segments, script_input, c_list, style, res_prompt, model, api_key)
             st.session_state.shot_df = inject_character_prompts(df, st.session_state.char_df)
             st.success("OK")
@@ -309,7 +256,7 @@ if st.session_state.shot_df is not None and not st.session_state.shot_df.empty:
     st.session_state.shot_df = st.data_editor(st.session_state.shot_df, num_rows="dynamic", key="s_ed")
     
     col1, col2 = st.columns(2)
-    if col1.button("🚀 5. 开始绘图"):
+    if col1.button("🚀 5. 绘图"):
         bar = st.progress(0); tot = len(st.session_state.shot_df); prev = st.columns(4)
         for i, r in st.session_state.shot_df.iterrows():
             url = generate_image(r['final_prompt'], res_str, api_key)
@@ -320,10 +267,8 @@ if st.session_state.shot_df is not None and not st.session_state.shot_df.empty:
             if i < tot-1: time.sleep(32)
         st.success("完成!")
 
-    if col2.button("📦 6. 下载草稿 (JianyingDraft.zip)"):
+    if col2.button("📦 6. 下载草稿包"):
         if st.session_state.gen_imgs:
             zip_buf = create_draft_zip(st.session_state.shot_df, st.session_state.gen_imgs, st.session_state.audio_data["bytes"], st.session_state.audio_data["name"])
             st.download_button("⬇️ 下载草稿包", zip_buf.getvalue(), "Jianying_Draft.zip", "application/zip")
-        else: st.warning("请先绘图")
-elif st.session_state.shot_df is not None:
-    st.error("⚠️ 异常：即使启用了保底模式，分镜表依然为空。请检查网络或Key。")
+        else: st.warning("先绘图")
