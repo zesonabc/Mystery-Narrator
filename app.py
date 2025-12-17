@@ -12,23 +12,23 @@ import os
 # ==========================================
 # 1. 页面配置
 # ==========================================
-st.set_page_config(page_title="MysteryNarrator V35 (开源内核版)", page_icon="🧬", layout="wide")
+st.set_page_config(page_title="MysteryNarrator V36 (听写加固版)", page_icon="🕵️", layout="wide")
 st.markdown("""
 <style>
     .stApp { background-color: #121212; color: #e0e0e0; }
     .stButton > button { background-color: #00E676; color: black; border: none; padding: 12px; font-weight: bold; border-radius: 6px; }
     .stSuccess { background-color: #1b5e20; color: white; }
+    .stError { background-color: #b71c1c; color: white; padding: 10px; border-radius: 5px; }
     img:hover { transform: scale(1.02); transition: 0.3s; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 剪映草稿生成器 (深度复刻 pyJianYingDraft 结构)
+# 2. 剪映草稿生成器
 # ==========================================
 class JianyingDraftGenerator:
     def __init__(self):
         self.project_id = str(uuid.uuid4()).upper()
-        # 补全了所有空列表，防止 Key Error
         self.content_materials = {
             "videos": [], "audios": [], "texts": [], "canvas_animations": [], 
             "speeds": [], "sound_channel_mappings": [], "transitions": [], "effects": [],
@@ -45,7 +45,6 @@ class JianyingDraftGenerator:
     def _now(self): return int(time.time() * 1000000)
 
     def add_media_track(self, shot_df):
-        # 视频轨道
         video_segments = []
         current_offset = 0
         
@@ -53,143 +52,83 @@ class JianyingDraftGenerator:
             material_id = self._get_id()
             duration_us = int(round(row['duration'] * self.us_base))
             file_name = f"{i+1:03d}.jpg"
-            # 使用 win 格式路径，模拟本地文件
             file_path = f"D:/Mystery_Project/media/{file_name}"
             
-            # Content: Video Material
             self.content_materials["videos"].append({
-                "id": material_id,
-                "type": "photo",
-                "path": file_path,
-                "duration": 10800000000, # 图片默认给长一点
-                "width": self.width,
-                "height": self.height,
-                "name": file_name,
-                "material_name": file_name
+                "id": material_id, "type": "photo", "path": file_path,
+                "duration": 10800000000, "width": self.width, "height": self.height, "name": file_name, "material_name": file_name
             })
             
-            # Meta: Material Info
             self.meta_materials.append({
-                "create_time": self._now(),
-                "duration": 10800000000,
-                "extra_info": file_name,
-                "file_Path": file_path,
-                "height": self.height,
-                "id": material_id,
-                "import_time": self._now(),
-                "import_time_ms": int(time.time()*1000),
-                "item_source": 1,
-                "md5": "",
-                "metetype": "photo",
-                "roughcut_time_range": {"duration": -1, "start": -1},
-                "sub_time_range": {"duration": -1, "start": -1},
-                "type": 0,
-                "width": self.width
+                "create_time": self._now(), "duration": 10800000000, "extra_info": file_name,
+                "file_Path": file_path, "height": self.height, "id": material_id, "import_time": self._now(),
+                "import_time_ms": int(time.time()*1000), "item_source": 1, "md5": "", "metetype": "photo",
+                "roughcut_time_range": {"duration": -1, "start": -1}, "sub_time_range": {"duration": -1, "start": -1}, "type": 0, "width": self.width
             })
             
-            # Content: Track Segment
             video_segments.append({
-                "id": self._get_id(),
-                "material_id": material_id,
+                "id": self._get_id(), "material_id": material_id,
                 "target_timerange": {"duration": duration_us, "start": current_offset},
                 "source_timerange": {"duration": duration_us, "start": 0},
-                "enable_adjust": True,
-                "enable_lut": True,
-                "enable_rot": True
+                "enable_adjust": True, "enable_lut": True, "enable_rot": True
             })
             current_offset += duration_us
             
         self.tracks.append({"id": self._get_id(), "type": "video", "segments": video_segments})
         self.total_duration = max(self.total_duration, current_offset)
 
-        # 字幕轨道
         text_segments = []
         current_offset = 0
         for i, row in shot_df.iterrows():
             duration_us = int(round(row['duration'] * self.us_base))
             text_id = self._get_id()
-            
-            content = {
-                "text": str(row['script']), 
-                "styles": [{"fill": {"color": [1.0, 1.0, 1.0]}}], # 白色字
-                "strokes": [{"color": [0.0, 0.0, 0.0], "width": 0.05}] # 黑色描边
-            }
-            
+            content = {"text": str(row['script']), "styles": [{"fill": {"color": [1.0, 1.0, 1.0]}}], "strokes": [{"color": [0.0, 0.0, 0.0], "width": 0.05}]}
             self.content_materials["texts"].append({
-                "id": text_id, 
-                "type": "text", 
-                "content": json.dumps(content), 
-                "font_size": 15.0,
-                "name": "subtitle"
+                "id": text_id, "type": "text", "content": json.dumps(content), "font_size": 15.0, "name": "subtitle"
             })
-            
-            text_segments.append({
-                "id": self._get_id(), 
-                "material_id": text_id, 
-                "target_timerange": {"duration": duration_us, "start": current_offset}, 
-                "source_timerange": {"duration": duration_us, "start": 0}
-            })
+            text_segments.append({"id": self._get_id(), "material_id": text_id, "target_timerange": {"duration": duration_us, "start": current_offset}, "source_timerange": {"duration": duration_us, "start": 0}})
             current_offset += duration_us
         self.tracks.append({"id": self._get_id(), "type": "text", "segments": text_segments})
 
     def add_audio_track(self, audio_filename, duration_us):
         audio_id = self._get_id()
         file_path = f"D:/Mystery_Project/media/{audio_filename}"
-        
-        self.content_materials["audios"].append({
-            "id": audio_id, "path": file_path, "duration": duration_us, "type": "extract_music", "name": audio_filename
-        })
-        self.meta_materials.append({
-            "create_time": self._now(), "duration": duration_us, "extra_info": audio_filename, 
-            "file_Path": file_path, "id": audio_id, "import_time": self._now(), 
-            "import_time_ms": int(time.time()*1000), "item_source": 1, "md5": "", "metetype": "music", 
-            "roughcut_time_range": {"duration": -1, "start": -1}, "sub_time_range": {"duration": -1, "start": -1}, "type": 1
-        })
-        
-        self.tracks.append({"id": self._get_id(), "type": "audio", "segments": [{
-            "id": self._get_id(), "material_id": audio_id, 
-            "target_timerange": {"duration": duration_us, "start": 0}, 
-            "source_timerange": {"duration": duration_us, "start": 0}
-        }]})
+        self.content_materials["audios"].append({"id": audio_id, "path": file_path, "duration": duration_us, "type": "extract_music", "name": audio_filename})
+        self.meta_materials.append({"create_time": self._now(), "duration": duration_us, "extra_info": audio_filename, "file_Path": file_path, "id": audio_id, "import_time": self._now(), "import_time_ms": int(time.time()*1000), "item_source": 1, "md5": "", "metetype": "music", "roughcut_time_range": {"duration": -1, "start": -1}, "sub_time_range": {"duration": -1, "start": -1}, "type": 1})
+        self.tracks.append({"id": self._get_id(), "type": "audio", "segments": [{"id": self._get_id(), "material_id": audio_id, "target_timerange": {"duration": duration_us, "start": 0}, "source_timerange": {"duration": duration_us, "start": 0}}]})
         self.total_duration = max(self.total_duration, duration_us)
 
     def get_content_json(self):
-        return {
-            "id": self.project_id,
-            "materials": self.content_materials,
-            "tracks": self.tracks,
-            "version": 2, 
-            # 【重要修复】增加 canvas_config，防止无限加载
-            "canvas_config": {"width": self.width, "height": self.height, "ratio": "16:9"},
-            "config": {"width": self.width, "height": self.height, "fps": 30},
-            "platform": {"os": "windows"}
-        }
+        return {"id": self.project_id, "materials": self.content_materials, "tracks": self.tracks, "version": 2, "canvas_config": {"width": self.width, "height": self.height, "ratio": "16:9"}, "config": {"width": self.width, "height": self.height, "fps": 30}, "platform": {"os": "windows"}}
 
     def get_meta_json(self):
-        # draft_root 留空，强迫剪映重置路径，解决打不开的问题
-        return {
-            "draft_materials": self.meta_materials,
-            "tm_draft_create_time": self._now(),
-            "tm_draft_modify_time": self._now(),
-            "draft_root": "", 
-            "draft_cover": "draft_cover.jpg",
-            "draft_name": "Mystery_Project",
-            "draft_id": self.project_id,
-            "tm_duration": self.total_duration
-        }
+        return {"draft_materials": self.meta_materials, "tm_draft_create_time": self._now(), "tm_draft_modify_time": self._now(), "draft_root": "", "draft_cover": "draft_cover.jpg", "draft_name": "Mystery_Project", "draft_id": self.project_id, "tm_duration": self.total_duration}
 
 # ==========================================
-# 3. 核心 API (修复分镜重复)
+# 3. 核心 API (听写功能加固)
 # ==========================================
-def get_headers(api_key): return {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+def get_headers(api_key): return {"Authorization": f"Bearer {api_key.strip()}", "Content-Type": "application/json"}
 def clean_json_text(text): return re.sub(r'<think>.*?</think>', '', re.sub(r'```json|```', '', text), flags=re.DOTALL).strip()
 
 def transcribe_audio(audio_file, api_key):
     url = "https://api.siliconflow.cn/v1/audio/transcriptions"
+    # 【修复1】强制重置指针
     audio_file.seek(0)
-    files = {'file': (audio_file.name, audio_file.getvalue(), audio_file.type), 'model': (None, 'FunAudioLLM/SenseVoiceSmall'), 'response_format': (None, 'verbose_json')}
-    try: return requests.post(url, headers={"Authorization": f"Bearer {api_key}"}, files=files, timeout=60).json()
-    except: return None
+    # 【修复2】指定文件名，防止特殊字符报错
+    files = {
+        'file': ("audio.mp3", audio_file.getvalue(), audio_file.type), 
+        'model': (None, 'FunAudioLLM/SenseVoiceSmall'), 
+        'response_format': (None, 'verbose_json')
+    }
+    try: 
+        # 【修复3】超时时间延长到 120s
+        res = requests.post(url, headers={"Authorization": f"Bearer {api_key.strip()}"}, files=files, timeout=120)
+        if res.status_code == 200:
+            return res.json(), None
+        else:
+            return None, f"API Error {res.status_code}: {res.text}"
+    except Exception as e: 
+        return None, str(e)
 
 def extract_characters_silicon(script, model, key):
     url = "https://api.siliconflow.cn/v1/chat/completions"
@@ -201,31 +140,24 @@ def extract_characters_silicon(script, model, key):
     except: return pd.DataFrame(columns=['name', 'prompt'])
 
 def analyze_segments_robust(segments, script_text, char_names, style, res_p, model, key):
-    # 1. 准备数据源
     final_segments = []
     if segments:
         final_segments = segments
     elif script_text and len(script_text.strip()) > 0:
-        chunks = re.split(r'([。？！；\n])', script_text)
+        chunks = re.split(r'([。？！；\n\.\?\!])', script_text)
         current = ""
         for chunk in chunks:
-            if len(current) + len(chunk) < 18 and not re.match(r'[。？！\n]', chunk): current += chunk
+            if len(current) + len(chunk) < 30 and not re.match(r'[。？！\n\.\?\!]', chunk): current += chunk
             else: 
-                if current: 
-                    dur = max(2.0, len(current) * 0.22)
-                    final_segments.append({"text": current, "duration": dur})
+                if current.strip(): final_segments.append({"text": current, "duration": max(2.5, len(current)*0.15)})
                 current = chunk
-        if current: 
-            dur = max(2.0, len(current) * 0.22)
-            final_segments.append({"text": current, "duration": dur})
+        if current.strip(): final_segments.append({"text": current, "duration": max(2.5, len(current)*0.15)})
             
     if not final_segments: return pd.DataFrame(columns=['duration', 'script', 'type', 'final_prompt'])
 
     try:
         char_list = ", ".join(char_names) if char_names else "无特定角色"
         input_json = json.dumps([{"id":i,"text":s.get('text','')} for i,s in enumerate(final_segments)], ensure_ascii=False)
-        
-        # 强制 AI 即使出错也不能返回重复内容
         sys_prompt = f"""
         你是中国悬疑导演。角色:{char_list}。风格:{style}。构图:{res_p}。
         任务: 为每一句字幕设计画面。
@@ -233,11 +165,8 @@ def analyze_segments_robust(segments, script_text, char_names, style, res_p, mod
         1. 必须强制中国背景(Chinese setting)，中国人。
         2. 输出 JSON: {{'segments': [...]}}。
         """
-        
         res = requests.post("https://api.siliconflow.cn/v1/chat/completions", json={"model":model,"messages":[{"role":"system","content":sys_prompt},{"role":"user","content":input_json}],"response_format":{"type":"json_object"}}, headers=get_headers(key), timeout=90)
-        
-        content = clean_json_text(res.json()['choices'][0]['message']['content'])
-        result_list = json.loads(content).get('segments', [])
+        result_list = json.loads(clean_json_text(res.json()['choices'][0]['message']['content'])).get('segments', [])
         
         merged = []
         for i, seg in enumerate(final_segments):
@@ -245,34 +174,11 @@ def analyze_segments_robust(segments, script_text, char_names, style, res_p, mod
             dur = seg.get('duration')
             if dur is None: dur = seg['end'] - seg['start']
             
-            # 【核心修复】如果 AI 没给结果(None)，不要只给通用词！
-            # 必须把当前的字幕内容 (seg['text']) 加进 Prompt，这样每张图肯定不一样！
-            if vis:
-                final_prompt = vis['final_prompt']
-            else:
-                final_prompt = f"Chinese suspense scene, {style}, visual of: {seg.get('text','')} "
-            
-            merged.append({
-                "duration": dur,
-                "script": seg.get('text'),
-                "type": vis['type'] if vis else "SCENE",
-                "final_prompt": final_prompt
-            })
+            final_prompt = vis['final_prompt'] if vis else f"Chinese suspense scene, {style}, visual of: {seg.get('text','')} "
+            merged.append({"duration": dur, "script": seg.get('text'), "type": vis['type'] if vis else "SCENE", "final_prompt": final_prompt})
         return pd.DataFrame(merged)
-
     except:
-        # 兜底逻辑同样加入具体文本
-        fallback = []
-        for seg in final_segments:
-            dur = seg.get('duration')
-            if dur is None: dur = max(2.0, len(seg.get('text','')) * 0.22)
-            fallback.append({
-                "duration": dur, 
-                "script": seg.get('text'), 
-                "type": "SCENE", 
-                "final_prompt": f"Chinese suspense shot, {style}, showing: {seg.get('text','')}"
-            })
-        return pd.DataFrame(fallback)
+        return pd.DataFrame([{"duration": s.get('duration', max(2.5, len(s.get('text',''))*0.2)), "script": s.get('text'), "type": "SCENE", "final_prompt": f"Chinese suspense shot, {style}, showing: {s.get('text','')}"} for s in final_segments])
 
 def inject_character_prompts(shot_df, char_df):
     if shot_df is None or shot_df.empty or 'final_prompt' not in shot_df.columns: return pd.DataFrame(columns=['duration', 'script', 'type', 'final_prompt'])
@@ -300,21 +206,17 @@ def create_draft_zip(shot_df, imgs, audio_bytes, audio_name):
     gen.add_media_track(shot_df)
     
     root = "Mystery_Project_Draft"
-    # 补全文件
     files = {
         "draft_content.json": json.dumps(gen.get_content_json(), indent=4),
         "draft_meta_info.json": json.dumps(gen.get_meta_json(), indent=4),
         "draft_virtual_store.json": json.dumps({"virtual_objects": []}, indent=4),
         "draft_settings": json.dumps({"draft_mode": 1, "operate_system": 1}, indent=4),
-        "key_value.json": "{}",
-        "draft_agency_config.json": "{}",
-        "draft_biz_config.json": "{}"
+        "key_value.json": "{}", "draft_agency_config.json": "{}", "draft_biz_config.json": "{}"
     }
 
     with zipfile.ZipFile(buf, "w") as zf:
         for name, content in files.items(): zf.writestr(f"{root}/{name}", content)
         zf.writestr(f"{root}/media/{audio_name}", audio_bytes)
-        
         first_img = None
         for i, u in imgs.items():
             try: 
@@ -342,8 +244,8 @@ with st.sidebar:
     style = st.text_area("风格", "Film noir, suspense thriller, Chinese background.", height=60)
     st.info("🎨 绘图: FLUX.1-schnell")
 
-st.title("🧬 MysteryNarrator V35 (开源内核版)")
-st.caption("修复分镜重复 | 修复草稿加载 | 完美工程结构")
+st.title("🛡️ MysteryNarrator V36 (听写加固版)")
+st.caption("修复'听写失败'误报 | 增强错误显示 | 超时保护")
 
 c1, c2 = st.columns(2)
 with c1: script_input = st.text_area("1. 粘贴文案", height=150)
@@ -355,14 +257,18 @@ if st.button("🔍 3. 智能分析"):
     else:
         if audio:
             st.session_state.audio_data = {"name": audio.name, "bytes": audio.getvalue()}
-            with st.spinner("听写..."):
-                asr = transcribe_audio(audio, api_key)
+            with st.spinner("听写中..."):
+                # 获取返回值和错误信息
+                asr, error_msg = transcribe_audio(audio, api_key)
+                
                 if asr and 'segments' in asr:
                     st.session_state.segments = asr['segments']
                     st.success("✅ 录音对齐成功")
                 else:
                     st.session_state.segments = []
-                    st.warning("⚠️ 听写失败，使用文案估算")
+                    # 显示具体错误原因
+                    if error_msg: st.error(f"❌ 听写服务报错: {error_msg}")
+                    st.warning("⚠️ 转为【文案估算模式】继续运行...")
         else:
             st.session_state.audio_data = {"name": "silent.mp3", "bytes": b""}
             st.session_state.segments = []
@@ -395,7 +301,7 @@ if st.session_state.shot_df is not None and not st.session_state.shot_df.empty:
             if "Error" not in url:
                 st.session_state.gen_imgs[i] = url
                 with prev[i%4]: st.image(url, caption=f"#{i+1}", use_column_width=True)
-            bar.progress((i+1)/tot); time.sleep(1) # FLUX 很快，1秒足矣
+            bar.progress((i+1)/tot); time.sleep(1) 
         st.success("完成!")
     if c2.button("📦 6. 下载工程包"):
         if st.session_state.gen_imgs:
