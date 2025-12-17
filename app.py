@@ -12,18 +12,19 @@ import os
 # ==========================================
 # 1. 页面配置
 # ==========================================
-st.set_page_config(page_title="MysteryNarrator V31 (防崩修复版)", page_icon="🚑", layout="wide")
+st.set_page_config(page_title="MysteryNarrator V32 (故障显影版)", page_icon="🚑", layout="wide")
 st.markdown("""
 <style>
     .stApp { background-color: #121212; color: #e0e0e0; }
-    .stButton > button { background-color: #D50000; color: white; border: none; padding: 12px; font-weight: bold; border-radius: 6px; }
-    .stSuccess { background-color: #2e7d32; color: white; }
-    img:hover { transform: scale(1.02); transition: 0.3s; }
+    .stButton > button { background-color: #6200EA; color: white; border: none; padding: 12px; font-weight: bold; border-radius: 6px; }
+    .stSuccess { background-color: #00C853; color: white; }
+    .stError { background-color: #D32F2F; color: white; padding: 10px; border-radius: 5px; }
+    img { border-radius: 5px; border: 1px solid #333; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 剪映草稿生成器 (保持 V30 的完美结构)
+# 2. 剪映草稿生成器 (保持V30完美结构)
 # ==========================================
 class JianyingDraftGenerator:
     def __init__(self):
@@ -70,7 +71,6 @@ class JianyingDraftGenerator:
         self.tracks.append({"id": self._get_id(), "type": "video", "segments": video_segments})
         self.total_duration = max(self.total_duration, current_offset)
 
-        # Text Track
         text_segments = []
         current_offset = 0
         for i, row in shot_df.iterrows():
@@ -97,7 +97,7 @@ class JianyingDraftGenerator:
         return {"draft_materials": self.meta_materials, "tm_draft_create_time": self._now(), "tm_draft_modify_time": self._now(), "draft_root": "", "draft_cover": "", "draft_name": "Mystery_Project", "draft_id": self.project_id, "tm_duration": self.total_duration}
 
 # ==========================================
-# 3. 核心 API (修复崩溃点)
+# 3. 核心 API
 # ==========================================
 def get_headers(api_key): return {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 def clean_json_text(text): return re.sub(r'<think>.*?</think>', '', re.sub(r'```json|```', '', text), flags=re.DOTALL).strip()
@@ -112,98 +112,44 @@ def transcribe_audio(audio_file, api_key):
 def extract_characters_silicon(script, model, key):
     url = "https://api.siliconflow.cn/v1/chat/completions"
     try:
-        # Prompt 兼容中英文输入
-        res = requests.post(url, json={"model":model,"messages":[{"role":"system","content":"提取剧本角色。规则：1. 无论输入语言，都强制设定为中国面孔(Asian Chinese face)。2. 输出JSON List: [{'name':'xx','prompt':'...'}]"},{"role":"user","content":script}],"response_format":{"type":"json_object"}}, headers=get_headers(key), timeout=45)
+        res = requests.post(url, json={"model":model,"messages":[{"role":"system","content":"提取中国悬疑剧本角色，默认中国面孔。输出JSON List: [{'name':'xx','prompt':'...'}]"},{"role":"user","content":script}],"response_format":{"type":"json_object"}}, headers=get_headers(key), timeout=45)
         df = pd.DataFrame(json.loads(clean_json_text(res.json()['choices'][0]['message']['content'])))
         if not df.empty: df = df[~df['name'].str.contains('博主|我|Host',case=False,na=False)]
         return df
     except: return pd.DataFrame(columns=['name', 'prompt'])
 
 def analyze_segments_robust(segments, script_text, char_names, style, res_p, model, key):
-    # 1. 准备数据源
-    final_segments = []
-    if segments: 
-        final_segments = segments
-    elif script_text and len(script_text.strip()) > 0:
-        # 兼容英文切分
-        chunks = re.split(r'([。？！；\.\?\!\n])', script_text)
+    final_segments = segments if segments else []
+    if not final_segments and script_text:
+        chunks = re.split(r'([。？！；\n\.\?\!])', script_text)
         current = ""
         for chunk in chunks:
-            # 简单判断，防止英文被切得太碎
-            if len(current) + len(chunk) < 50 and not re.match(r'[。？！\.\?\!\n]', chunk): current += chunk
+            if len(current) + len(chunk) < 30 and not re.match(r'[。？！\n\.\?\!]', chunk): current += chunk
             else: 
-                if current.strip(): 
-                    # 英文语速大概 0.4s 一个单词，中文 0.25s 一个字，这里做个通用估算
-                    dur = max(2.5, len(current) * 0.15) 
-                    final_segments.append({"text": current, "duration": dur})
+                if current.strip(): final_segments.append({"text": current, "duration": max(2.5, len(current)*0.2)})
                 current = chunk
-        if current.strip(): 
-            final_segments.append({"text": current, "duration": max(2.5, len(current) * 0.15)})
-    
-    # 【核心修复1】如果依然为空，返回一个包含所有列名的空表，防止后面 KeyError
-    if not final_segments: 
-        return pd.DataFrame(columns=['duration', 'script', 'type', 'final_prompt'])
+        if current.strip(): final_segments.append({"text": current, "duration": max(2.5, len(current)*0.2)})
+            
+    if not final_segments: return pd.DataFrame(columns=['duration', 'script', 'type', 'final_prompt'])
 
     try:
-        char_list = ", ".join(char_names) if char_names else "No specific characters"
+        char_list = ", ".join(char_names) if char_names else "无特定角色"
         input_json = json.dumps([{"id":i,"text":s.get('text','')} for i,s in enumerate(final_segments)], ensure_ascii=False)
-        
-        # 【核心修复2】Prompt 优化：明确告诉 AI，无论输入什么语言，都按中国风格出图
-        sys_prompt = f"""
-        You are a director adapting a script into a Chinese suspense movie.
-        Characters: {char_list}
-        Style: {style}
-        
-        Task: Design visual prompts for each line.
-        RULES:
-        1. Regardless of the script language (English/Chinese), the VISUALS must be CHINESE (Asian faces, Chinese environment).
-        2. Output JSON: {{"segments": [{{"index": 0, "type": "SCENE", "final_prompt": "..."}}]}}
-        """
-        
-        res = requests.post("https://api.siliconflow.cn/v1/chat/completions", json={"model":model,"messages":[{"role":"system","content":sys_prompt},{"role":"user","content":input_json}],"response_format":{"type":"json_object"}}, headers=get_headers(key), timeout=90)
-        
-        content = clean_json_text(res.json()['choices'][0]['message']['content'])
-        result_list = json.loads(content).get('segments', [])
+        res = requests.post("https://api.siliconflow.cn/v1/chat/completions", json={"model":model,"messages":[{"role":"system","content":f"你是中国悬疑导演。角色:{char_list}。风格:{style}。构图:{res_p}。规则: 1. 强制中国背景(Chinese setting)，中国人(Asian Chinese face)。 2. 输出 JSON: {{'segments': [...]}}"},{"role":"user","content":input_json}],"response_format":{"type":"json_object"}}, headers=get_headers(key), timeout=90)
+        result_list = json.loads(clean_json_text(res.json()['choices'][0]['message']['content'])).get('segments', [])
         
         merged = []
         for i, seg in enumerate(final_segments):
             vis = next((item for item in result_list if item.get('index') == i), None)
             dur = seg.get('duration')
             if dur is None: dur = seg['end'] - seg['start']
-            
-            # 兜底 prompt
-            fallback_prompt = f"Chinese suspense scene, {style}, {seg.get('text','')}"
-            
-            merged.append({
-                "duration": dur, 
-                "script": seg.get('text'), 
-                "type": vis['type'] if vis else "SCENE", 
-                "final_prompt": vis['final_prompt'] if vis else fallback_prompt
-            })
+            merged.append({"duration": dur, "script": seg.get('text'), "type": vis['type'] if vis else "SCENE", "final_prompt": vis['final_prompt'] if vis else f"Chinese suspense scene, {style}"})
         return pd.DataFrame(merged)
+    except:
+        return pd.DataFrame([{"duration": s.get('duration', max(2.5, len(s.get('text',''))*0.2)), "script": s.get('text'), "type": "SCENE", "final_prompt": f"Chinese suspense shot, {style}"} for s in final_segments])
 
-    except Exception as e:
-        print(f"Error: {e}")
-        # 【核心修复3】报错后，强制返回一个格式正确的 DataFrame
-        fallback = []
-        for seg in final_segments:
-            dur = seg.get('duration')
-            if dur is None: dur = 5.0
-            fallback.append({
-                "duration": dur, 
-                "script": seg.get('text'), 
-                "type": "SCENE", 
-                "final_prompt": f"Chinese suspense shot, {style}"
-            })
-        return pd.DataFrame(fallback)
-
-# 【核心修复4】防止 KeyError 的最终防线
 def inject_character_prompts(shot_df, char_df):
-    # 检查 shot_df 是否包含必要的列
-    if shot_df is None or shot_df.empty or 'final_prompt' not in shot_df.columns:
-        # 返回一个空但合法的 DataFrame，避免 streamlit 报错
-        return pd.DataFrame(columns=['duration', 'script', 'type', 'final_prompt'])
-    
+    if shot_df is None or shot_df.empty or 'final_prompt' not in shot_df.columns: return pd.DataFrame(columns=['duration', 'script', 'type', 'final_prompt'])
     char_dict = {f"[{row['name']}]": row['prompt'] for _, row in char_df.iterrows()}
     def replace(p):
         for ph in re.findall(r'\[.*?\]', str(p)):
@@ -213,12 +159,39 @@ def inject_character_prompts(shot_df, char_df):
     shot_df['final_prompt'] = shot_df['final_prompt'].apply(replace)
     return shot_df
 
-def generate_image(prompt, size, key):
+# 【重点修改】绘图函数带详细报错
+def generate_image_debug(prompt, size, key):
     try:
-        width, height = 1280, 720 if "16:9" in size else 720, 1280
-        res = requests.post("https://api.siliconflow.cn/v1/images/generations", json={"model":"black-forest-labs/FLUX.1-schnell","prompt":prompt,"image_size":f"{width}x{height}","batch_size":1,"num_inference_steps":4,"guidance_scale":3.5}, headers=get_headers(key), timeout=50)
-        return res.json()['images'][0]['url'] if res.status_code == 200 else "Error"
-    except: return "Error"
+        # SiliconFlow 建议格式: 1024x1024, 720x1280 (必须是字符串)
+        # 修正: FLUX Schnell 支持的尺寸是固定的几种，1280x720 可能不被支持
+        # 我们改成最稳的 1024x1024 然后裁剪，或者尝试标准比例
+        width, height = "1024", "1024" 
+        if "16:9" in size: width, height = "1024", "576" # 16:9 接近比例
+        if "9:16" in size: width, height = "576", "1024" # 9:16 接近比例
+        
+        payload = {
+            "model": "black-forest-labs/FLUX.1-schnell",
+            "prompt": prompt,
+            "image_size": f"{width}x{height}", 
+            "batch_size": 1,
+            "num_inference_steps": 4,
+            "guidance_scale": 1 # Schnell 建议设为 1 或 3.5
+        }
+        
+        res = requests.post(
+            "https://api.siliconflow.cn/v1/images/generations", 
+            json=payload, 
+            headers=get_headers(key), 
+            timeout=50
+        )
+        
+        if res.status_code == 200:
+            return True, res.json()['images'][0]['url']
+        else:
+            return False, f"API Error {res.status_code}: {res.text}"
+            
+    except Exception as e:
+        return False, f"Code Error: {str(e)}"
 
 def create_draft_zip(shot_df, imgs, audio_bytes, audio_name):
     buf = io.BytesIO()
@@ -228,34 +201,29 @@ def create_draft_zip(shot_df, imgs, audio_bytes, audio_name):
     gen.add_media_track(shot_df)
     
     root = "Mystery_Project_Draft"
-    content_json = json.dumps(gen.get_content_json(), indent=4)
-    meta_json = json.dumps(gen.get_meta_json(), indent=4)
-    virtual_store = json.dumps({"virtual_objects": []}, indent=4)
-    draft_settings = json.dumps({"draft_mode": 1, "operate_system": 1}, indent=4)
-    key_value = json.dumps({}, indent=4)
-    draft_agency = json.dumps({"agency_id": "", "template_id": ""}, indent=4)
-    draft_biz = json.dumps({}, indent=4)
-    
+    # 补全所有配置文件
+    files = {
+        "draft_content.json": json.dumps(gen.get_content_json(), indent=4),
+        "draft_meta_info.json": json.dumps(gen.get_meta_json(), indent=4),
+        "draft_virtual_store.json": json.dumps({"virtual_objects": []}, indent=4),
+        "draft_settings": json.dumps({"draft_mode": 1, "operate_system": 1}, indent=4),
+        "key_value.json": "{}",
+        "draft_agency_config.json": "{}",
+        "draft_biz_config.json": "{}"
+    }
+
     with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr(f"{root}/draft_content.json", content_json)
-        zf.writestr(f"{root}/draft_meta_info.json", meta_json)
-        zf.writestr(f"{root}/draft_virtual_store.json", virtual_store)
-        zf.writestr(f"{root}/draft_settings", draft_settings) 
-        zf.writestr(f"{root}/key_value.json", key_value)
-        zf.writestr(f"{root}/draft_agency_config.json", draft_agency)
-        zf.writestr(f"{root}/draft_biz_config.json", draft_biz)
+        for name, content in files.items(): zf.writestr(f"{root}/{name}", content)
         zf.writestr(f"{root}/media/{audio_name}", audio_bytes)
         
-        first_img_bytes = None
+        first_img = None
         for i, u in imgs.items():
             try: 
-                img_data = requests.get(u).content
-                if i == 0: first_img_bytes = img_data
-                zf.writestr(f"{root}/media/{i+1:03d}.jpg", img_data)
+                data = requests.get(u).content
+                if i == 0: first_img = data
+                zf.writestr(f"{root}/media/{i+1:03d}.jpg", data)
             except: pass
-        if first_img_bytes:
-            zf.writestr(f"{root}/draft_cover.jpg", first_img_bytes)
-            
+        if first_img: zf.writestr(f"{root}/draft_cover.jpg", first_img)
     return buf
 
 # ==========================================
@@ -269,16 +237,16 @@ if 'segments' not in st.session_state: st.session_state.segments = []
 
 with st.sidebar:
     st.markdown("### 🔑 Key"); api_key = st.text_input("SiliconFlow Key", type="password")
-    st.markdown("### 🕵️ 博主"); fixed_host = st.text_area("Prompt", "(A 30-year-old Chinese man, Asian face, black hair, green cap, leather jacket:1.4), looking at camera", height=80)
+    st.markdown("### 🕵️ 博主"); fixed_host = st.text_area("Prompt", "(A 30-year-old Chinese man, Asian face, green cap, leather jacket:1.4)", height=80)
     st.markdown("### 🧠 设置"); model = st.selectbox("大脑", ["deepseek-ai/DeepSeek-V3", "Qwen/Qwen2.5-72B-Instruct"])
     aspect = st.selectbox("画幅", ["16:9 (横屏)", "9:16 (竖屏)"])
     style = st.text_area("风格", "Film noir, suspense thriller, Chinese background.", height=60)
     st.info("🎨 绘图: FLUX.1-schnell")
 
-st.title("🚑 MysteryNarrator V31 (防崩·双语版)")
+st.title("🚑 MysteryNarrator V32 (故障显影版)")
 
 c1, c2 = st.columns(2)
-with c1: script_input = st.text_area("1. 粘贴文案 (中文或英文皆可)", height=150)
+with c1: script_input = st.text_area("1. 粘贴文案", height=150)
 with c2: audio = st.file_uploader("2. 上传录音", type=['mp3','wav','m4a'])
 
 if st.button("🔍 3. 智能分析"):
@@ -312,32 +280,49 @@ if st.session_state.char_df is not None:
         with st.spinner("导演设计中..."):
             c_list = st.session_state.char_df['name'].tolist()
             safe_script = script_input if script_input else ""
-            
-            # 这里调用新的防崩函数
             df = analyze_segments_robust(st.session_state.segments, safe_script, c_list, style, aspect, model, api_key)
             st.session_state.shot_df = inject_character_prompts(df, st.session_state.char_df)
-            
-            # 如果依然为空，可能是真的没文案
-            if st.session_state.shot_df.empty: 
-                st.error("❌ 生成失败：请检查文案是否为空。")
-            else: 
-                st.success("OK！分镜已生成，请看下方表格。")
+            if st.session_state.shot_df.empty: st.error("❌ 分镜为空")
+            else: st.success("OK")
 
-# 只有 shot_df 不为空时才显示绘图区，防止报错
+# 只有在分镜不为空时才渲染绘图区域
 if st.session_state.shot_df is not None and not st.session_state.shot_df.empty:
+    st.markdown("### 5. 绘图预览")
     st.session_state.shot_df = st.data_editor(st.session_state.shot_df, num_rows="dynamic", key="s_ed", use_container_width=True)
+    
+    # 画廊区域：无论是否正在生成，只要有图就显示
+    gallery_container = st.container()
+    cols = gallery_container.columns(4)
+    # 如果已有图片，先显示出来
+    if st.session_state.gen_imgs:
+        for i, url in st.session_state.gen_imgs.items():
+            if i < len(st.session_state.shot_df): # 防止索引越界
+                with cols[i % 4]:
+                    st.image(url, caption=f"#{i+1}", use_column_width=True)
+
     c1, c2 = st.columns(2)
-    if c1.button("🎨 5. FLUX 绘图"):
-        bar = st.progress(0); tot = len(st.session_state.shot_df); prev = st.columns(4)
+    if c1.button("🎨 5. FLUX 绘图 (点击开始)"):
+        bar = st.progress(0)
+        tot = len(st.session_state.shot_df)
+        
         for i, r in st.session_state.shot_df.iterrows():
-            url = generate_image(r['final_prompt'], aspect, api_key)
-            if "Error" not in url:
-                st.session_state.gen_imgs[i] = url
-                with prev[i%4]: st.image(url, caption=f"#{i+1}", use_column_width=True)
-            bar.progress((i+1)/tot); time.sleep(2)
-        st.success("完成!")
+            # 调用带 debug 的绘图函数
+            success, result = generate_image_debug(r['final_prompt'], aspect, api_key)
+            
+            if success:
+                st.session_state.gen_imgs[i] = result
+                # 实时刷新当前这张图
+                with cols[i % 4]:
+                    st.image(result, caption=f"#{i+1}", use_column_width=True)
+            else:
+                st.error(f"第 {i+1} 张失败: {result}") # 把错误打印出来！
+            
+            bar.progress((i+1)/tot)
+            time.sleep(1) # 稍微快一点
+        st.success("✅ 全部尝试完成")
+
     if c2.button("📦 6. 下载工程包"):
         if st.session_state.gen_imgs:
             zip_buf = create_draft_zip(st.session_state.shot_df, st.session_state.gen_imgs, st.session_state.audio_data["bytes"], st.session_state.audio_data["name"])
             st.download_button("⬇️ 下载草稿包", zip_buf.getvalue(), "Jianying_Mystery_Draft.zip", "application/zip", type="primary")
-        else: st.warning("先绘图")
+        else: st.warning("请先点击'FLUX绘图'生成图片")
