@@ -12,18 +12,18 @@ import os
 # ==========================================
 # 1. 页面配置
 # ==========================================
-st.set_page_config(page_title="MysteryNarrator V29 (完全体)", page_icon="🧬", layout="wide")
+st.set_page_config(page_title="MysteryNarrator V30 (完美克隆版)", page_icon="🧬", layout="wide")
 st.markdown("""
 <style>
     .stApp { background-color: #121212; color: #e0e0e0; }
-    .stButton > button { background-color: #00E676; color: black; border: none; padding: 12px; font-weight: bold; border-radius: 6px; }
-    .stSuccess { background-color: #1b5e20; color: white; }
+    .stButton > button { background-color: #6200EA; color: white; border: none; padding: 12px; font-weight: bold; border-radius: 6px; }
+    .stSuccess { background-color: #00C853; color: white; }
     img:hover { transform: scale(1.02); transition: 0.3s; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 剪映草稿生成器 (补全封面和设置)
+# 2. 剪映草稿生成器 (配置补全)
 # ==========================================
 class JianyingDraftGenerator:
     def __init__(self):
@@ -37,12 +37,13 @@ class JianyingDraftGenerator:
         self.width = 1920
         self.height = 1080
         self.us_base = 1000000 
-        self.total_duration = 0 # 记录总时长
+        self.total_duration = 0 
 
     def _get_id(self): return str(uuid.uuid4()).upper()
     def _now(self): return int(time.time() * 1000000)
 
     def add_media_track(self, shot_df):
+        # 视频轨道
         video_segments = []
         current_offset = 0
         
@@ -91,7 +92,7 @@ class JianyingDraftGenerator:
             current_offset += duration_us
             
         self.tracks.append({"id": self._get_id(), "type": "video", "segments": video_segments})
-        self.total_duration = max(self.total_duration, current_offset) # 更新总时长
+        self.total_duration = max(self.total_duration, current_offset)
 
         # 字幕轨道
         text_segments = []
@@ -121,21 +122,22 @@ class JianyingDraftGenerator:
             "materials": self.content_materials,
             "tracks": self.tracks,
             "version": 2,
-            "config": {"width": self.width, "height": self.height, "fps": 30}, # 补全 FPS
+            "config": {"width": self.width, "height": self.height, "fps": 30},
             "platform": {"os": "windows"}
         }
 
     def get_meta_json(self):
-        # 这里的 draft_cover 必须对应真实存在的文件名
+        # 【核心修复】将 draft_cover 和 draft_root 置空
+        # 让剪映自己去重新生成缩略图，而不是去读一个可能路径不对的文件，防止卡死
         return {
             "draft_materials": self.meta_materials,
             "tm_draft_create_time": self._now(),
             "tm_draft_modify_time": self._now(),
-            "draft_root": "D:/Mystery_Project",
-            "draft_cover": "draft_cover.jpg", # 补全封面引用
+            "draft_root": "", # 留空，防止D盘路径报错
+            "draft_cover": "", # 留空，让剪映自动生成
             "draft_name": "Mystery_Project",
             "draft_id": self.project_id,
-            "tm_duration": self.total_duration # 补全时长
+            "tm_duration": self.total_duration
         }
 
 # ==========================================
@@ -209,37 +211,43 @@ def generate_image(prompt, size, key):
         return res.json()['images'][0]['url'] if res.status_code == 200 else "Error"
     except: return "Error"
 
-# 【ZIP 打包升级】补全所有缺失文件
+# 【核心升级】补全所有缺失文件
 def create_draft_zip(shot_df, imgs, audio_bytes, audio_name):
     buf = io.BytesIO()
     gen = JianyingDraftGenerator()
     total_duration_us = int(shot_df['duration'].sum() * 1000000)
     
-    # 1. 构建数据
     gen.add_audio_track(audio_name, total_duration_us)
     gen.add_media_track(shot_df)
     
-    # 2. 根目录
     root = "Mystery_Project_Draft"
     
-    # 3. 准备文件内容
+    # 构造核心文件
     content_json = json.dumps(gen.get_content_json(), indent=4)
     meta_json = json.dumps(gen.get_meta_json(), indent=4)
-    virtual_store = json.dumps({"virtual_objects": []}, indent=4)
     
-    # 【新增】draft_settings 文件 (模仿正常文件)
-    draft_settings = "draft_settings_data" # 占位符，通常不影响打开，只需存在
-
+    # 【补全1】标准的占位配置文件
+    virtual_store = json.dumps({"virtual_objects": []}, indent=4)
+    draft_settings = json.dumps({"draft_mode": 1, "operate_system": 1}, indent=4) # 有效的设置 JSON
+    key_value = json.dumps({}, indent=4)
+    draft_agency = json.dumps({"agency_id": "", "template_id": ""}, indent=4)
+    draft_biz = json.dumps({}, indent=4)
+    
     with zipfile.ZipFile(buf, "w") as zf:
-        # 写入核心 JSON
         zf.writestr(f"{root}/draft_content.json", content_json)
         zf.writestr(f"{root}/draft_meta_info.json", meta_json)
         zf.writestr(f"{root}/draft_virtual_store.json", virtual_store)
-        zf.writestr(f"{root}/draft_settings", draft_settings) # 补全设置文件
+        
+        # 【补全2】写入缺失文件
+        zf.writestr(f"{root}/draft_settings", draft_settings) 
+        zf.writestr(f"{root}/key_value.json", key_value)
+        zf.writestr(f"{root}/draft_agency_config.json", draft_agency)
+        zf.writestr(f"{root}/draft_biz_config.json", draft_biz)
         
         # 写入媒体
         zf.writestr(f"{root}/media/{audio_name}", audio_bytes)
         
+        # 封面图 (虽然meta里置空了，但文件放进去作为备份)
         first_img_bytes = None
         for i, u in imgs.items():
             try: 
@@ -248,8 +256,6 @@ def create_draft_zip(shot_df, imgs, audio_bytes, audio_name):
                 zf.writestr(f"{root}/media/{i+1:03d}.jpg", img_data)
             except: pass
             
-        # 【新增】生成 draft_cover.jpg (使用第一张图)
-        # 这非常重要！没有封面图，剪映加载列表时会出错
         if first_img_bytes:
             zf.writestr(f"{root}/draft_cover.jpg", first_img_bytes)
             
@@ -272,8 +278,8 @@ with st.sidebar:
     style = st.text_area("风格", "Film noir, suspense thriller, Chinese background.", height=60)
     st.info("🎨 绘图: FLUX.1-schnell")
 
-st.title("🧬 MysteryNarrator V29 (完全体)")
-st.caption("补全封面/设置文件 | 修复加载卡死")
+st.title("🧬 MysteryNarrator V30 (完美克隆版)")
+st.caption("全文件补齐 | 修复卡死 | 像素级复刻")
 
 c1, c2 = st.columns(2)
 with c1: script_input = st.text_area("1. 粘贴文案", height=150)
